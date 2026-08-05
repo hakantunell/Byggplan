@@ -3,6 +3,19 @@
   "name": "byggplan-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-05",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "byggplan",
+      "database_id": "917aeb03-1562-490b-8fae-049da42bfdff"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "byggplan-files"
+    }
+  ],
   "vars": {
     "ALLOWED_ORIGIN": "https://byggplan.tunell.org"
   }
