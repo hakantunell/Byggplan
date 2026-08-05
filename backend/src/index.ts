@@ -107,10 +107,10 @@ app.get('/api/tasks', async c => {
     ${where}
     ORDER BY wa.sort_order, ws.sort_order, t.sort_order, r.sort_order
   `);
-  const tasks = projectId ? await statement.bind(projectId).all() : await statement.all();
+  const taskRows = projectId ? await statement.bind(projectId).all() : await statement.all();
 
   const grouped = new Map<string, any>();
-  for (const row of tasks.results as any[]) {
+  for (const row of taskRows.results as any[]) {
     if (!grouped.has(row.id)) grouped.set(row.id, {
       id: row.id,
       projectId: row.project_id,
@@ -119,12 +119,12 @@ app.get('/api/tasks', async c => {
       workArea: row.work_area,
       workSectionId: row.work_section_id,
       workSection: row.work_section,
-      section: row.work_area,
       title: row.title,
       description: row.description,
       status: row.status,
       assignee: row.assignee,
-      requirements: []
+      requirements: [],
+      technical: []
     });
     if (row.requirement_id) grouped.get(row.id).requirements.push({
       id: row.requirement_id,
@@ -137,7 +137,62 @@ app.get('/api/tasks', async c => {
       done: Boolean(row.done)
     });
   }
+
+  const projectIds = [...new Set([...grouped.values()].map(task => task.projectId))];
+  for (const id of projectIds) {
+    const resources = await c.env.DB.prepare(`
+      SELECT tr.id, tr.resource_type, tr.title, tr.summary, tr.revision,
+             tr.object_key, tr.external_url, tr.content_text,
+             l.entity_type, l.entity_id, l.sort_order
+      FROM technical_resources tr
+      JOIN technical_resource_links l ON l.technical_resource_id = tr.id
+      WHERE tr.project_id = ? AND tr.status = 'current'
+      ORDER BY l.sort_order, tr.title
+    `).bind(id).all();
+
+    for (const row of resources.results as any[]) {
+      const resource = {
+        id: row.id,
+        type: mapResourceType(row.resource_type),
+        title: row.title,
+        summary: row.summary ?? '',
+        revision: row.revision ?? undefined,
+        details: row.content_text ? String(row.content_text).split('\n').filter(Boolean) : [],
+        objectKey: row.object_key ?? undefined,
+        externalUrl: row.external_url ?? undefined,
+        sourceLevel: row.entity_type
+      };
+
+      for (const task of grouped.values()) {
+        if (task.projectId !== id) continue;
+        const applies = row.entity_type === 'project' && row.entity_id === task.projectId
+          || row.entity_type === 'work_area' && row.entity_id === task.workAreaId
+          || row.entity_type === 'work_section' && row.entity_id === task.workSectionId
+          || row.entity_type === 'task' && row.entity_id === task.id;
+        if (applies && !task.technical.some((item: any) => item.id === resource.id)) task.technical.push(resource);
+      }
+    }
+  }
+
   return c.json({ tasks: [...grouped.values()] });
+});
+
+app.get('/api/entities/:entityType/:entityId/control-points', async c => {
+  const entityType = c.req.param('entityType');
+  const entityId = c.req.param('entityId');
+  if (!['work_area', 'work_section', 'task'].includes(entityType)) {
+    return c.json({ ok: false, error: 'Ogiltig objekttyp.' }, 400);
+  }
+
+  const result = await c.env.DB.prepare(`
+    SELECT id, entity_type, entity_id, label, description, kind, unit,
+           minimum, maximum, required, sort_order
+    FROM control_points
+    WHERE entity_type = ? AND entity_id = ?
+    ORDER BY sort_order, label
+  `).bind(entityType, entityId).all();
+
+  return c.json({ controlPoints: result.results });
 });
 
 app.put('/api/requirements/:id', async c => {
@@ -158,5 +213,10 @@ app.post('/api/tasks/:id/review', async c => {
     .bind(crypto.randomUUID(), id, 'Moment redo för arbetsledarens kontroll').run();
   return c.json({ ok: true });
 });
+
+function mapResourceType(type: string) {
+  if (type === 'technical_data' || type === 'note' || type === 'link') return 'text';
+  return type;
+}
 
 export default app;
