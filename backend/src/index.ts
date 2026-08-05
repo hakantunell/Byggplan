@@ -10,7 +10,10 @@ type Bindings = {
 const app = new Hono<{ Bindings: Bindings }>();
 
 app.use('*', async (c, next) => cors({
-  origin: c.env.ALLOWED_ORIGIN,
+  origin: [
+    c.env.ALLOWED_ORIGIN,
+    'https://byggplan-web.hakan-tunell.workers.dev'
+  ],
   allowMethods: ['GET', 'POST', 'PUT', 'OPTIONS'],
   allowHeaders: ['Content-Type']
 })(c, next));
@@ -201,7 +204,7 @@ app.put('/api/requirements/:id', async c => {
   await c.env.DB.prepare(`
     INSERT INTO answers (id, requirement_id, value, done, updated_at)
     VALUES (?, ?, ?, ?, datetime('now'))
-    ON CONFLICT(requirement_id) DO UPDATE SET value=excluded.value, done=excluded.done, updated_at=datetime('now')
+    ON CONFLICT(requirement_id) DO UPDATE SET value=excluded.value, done=excluded.done, updated_at=datetime('now'))
   `).bind(crypto.randomUUID(), id, body.value ?? null, body.done ? 1 : 0).run();
   return c.json({ ok: true });
 });
