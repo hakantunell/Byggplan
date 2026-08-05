@@ -1,0 +1,10 @@
+{
+  "name": "byggplan",
+  "private": true,
+  "workspaces": ["frontend", "backend", "shared"],
+  "scripts": {
+    "build": "npm run build --workspace frontend && npm run build --workspace shared",
+    "dev:frontend": "npm run dev --workspace frontend",
+    "dev:backend": "npm run dev --workspace backend"
+  }
+}
