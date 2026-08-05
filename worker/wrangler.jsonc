@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "byggplan-api",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-01",
+  "vars": {
+    "ALLOWED_ORIGIN": "https://hakantunell.github.io"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "byggplan",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
+    }
+  ]
+}
