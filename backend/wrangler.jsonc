@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "byggplan-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-05",
+  "d1_databases": [
+    { "binding": "DB", "database_name": "byggplan", "database_id": "REPLACE_IN_CLOUDFLARE" }
+  ],
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "byggplan-files" }
+  ],
+  "vars": {
+    "ALLOWED_ORIGIN": "https://byggplan.tunell.org"
+  }
+}
