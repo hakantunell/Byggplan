@@ -4,21 +4,21 @@
 
 ### Administratör
 - Hanterar projektets struktur, användare och behörigheter.
-- Lägger in och uppdaterar ritningar, tekniska instruktioner, referensbilder och dokumentmallar.
+- Lägger in och uppdaterar ritningar, tekniskt underlag, referensbilder och dokumentmallar.
 - Bestämmer vilka uppgifter och bilagor som ska ingå i rapporter.
 - Kan exportera samtliga rapporter och underlag.
 
 ### Arbetsledare
 - Startar, tilldelar, granskar och avslutar arbetsavsnitt.
 - Kan exportera rapporter och underlag.
-- Kan läsa ritningar och tekniska instruktioner.
+- Kan läsa ritningar och tekniskt underlag.
 - Kan vid behov komplettera tekniskt underlag och projektinformation, beroende på behörighet.
 
 ### Utförare
 - Ser tilldelade och tillgängliga moment.
 - Registrerar mått, kontroller, kommentarer och foton.
-- Kan läsa ritningar och tekniska instruktioner som hör till aktuellt moment.
-- Kan inte ändra projektets styrande ritningar eller tekniska instruktioner.
+- Kan läsa ritningar och tekniskt underlag som hör till aktuellt moment.
+- Kan inte ändra projektets styrande ritningar eller tekniska underlag.
 
 ## PDF-export och myndighetsunderlag
 
@@ -67,25 +67,25 @@ Användaren ska kunna:
 - se vilken revision som är gällande
 - öppna ritningen i fullskärmsläge på telefon
 
-Senare versioner kan stödja markeringar och hänvisningspunkter på ritningen. En sådan markering ska kunna länkas till ett moment, mått, foto eller tekniskt dokument.
+Senare versioner kan stödja markeringar och hänvisningspunkter på ritningen. En sådan markering ska kunna länkas till ett moment, mått, foto eller tekniskt underlag.
 
 Endast administratör, eller arbetsledare med särskild behörighet, får lägga till, ersätta eller arkivera styrande ritningar. Äldre revisioner ska bevaras.
 
-## Teknisk information och arbetsinstruktioner
+## Tekniskt underlag
 
-Administratören ska kunna skapa tekniskt underlag som hör till projektets olika delar.
+Administratören ska kunna skapa tekniskt underlag som hör till projektets olika delar. Tekniskt underlag är referensdata och behöver inte vara en arbetsinstruktion.
 
 Underlaget ska kunna innehålla:
 - rubrik och beskrivande text
-- steg-för-steg-instruktioner
 - bilder, skisser och detaljbilder
 - mått, material, toleranser och kontrollpunkter
 - hänvisningar till ritningar och dokument
-- varningar och kritiska moment
-- länkar till tillverkaranvisningar
+- varningar och kritiska uppgifter
+- länkar till tillverkarinformation
 - versionsinformation och giltighetsstatus
 
 Tekniskt underlag ska kunna kopplas till:
+- projekt
 - arbetsområde
 - arbetsavsnitt
 - moment
@@ -93,13 +93,13 @@ Tekniskt underlag ska kunna kopplas till:
 - dokumentationskrav
 
 Exempel:
-- hur grundsulan ska armeras och gjutas
-- hur avloppsrör ska bäddas och vilket fall som ska kontrolleras
-- hur timmerknutar och dymlingar ska utföras
-- hur takkonstruktionen och anslutningar ska byggas
-- hur våtrummets golv, fall och tätskikt ska utföras
+- dimensioner och armering för grundsulan
+- bäddning, dimension och fall för avloppsrör
+- data om timmerknutar och dymlingar
+- takkonstruktionens uppbyggnad och anslutningar
+- våtrummets golv, fall och tätskikt
 
-När en användare öppnar ett moment ska relevant teknisk information visas under en tydlig knapp, exempelvis **Visa arbetsinstruktion**. Kritiska instruktioner ska även kunna visas automatiskt innan momentet startas eller avslutas.
+När en användare öppnar ett moment ska relevant underlag vara tillgängligt under knappen **Visa tekniskt underlag**. Underlaget ska vara läsbart utan att användaren behöver lämna momentet.
 
 Styrande tekniskt underlag får bara ändras av administratör, eller arbetsledare med särskild behörighet. Ändringar ska versionshanteras och äldre versioner ska bevaras.
 
@@ -110,8 +110,8 @@ Följande huvudobjekt ska ingå i den fortsatta datamodellen:
 - report_exports
 - drawings
 - drawing_revisions
-- technical_guides
-- technical_guide_revisions
+- technical_documents
+- technical_document_revisions
 - entity_attachments
 - entity_links
 
