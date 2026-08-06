@@ -17,9 +17,14 @@ type CurrentUser = {
 
 const app = new Hono<{ Bindings: Bindings }>();
 const DEMO_USERS = ['worker@demo.byggplan.local', 'supervisor@demo.byggplan.local'];
+const ALLOWED_ORIGINS = [
+  'https://byggplan.tunell.org',
+  'https://studio.byggplan.tunell.org',
+  'https://byggplan-web.hakan-tunell.workers.dev'
+];
 
 app.use('*', async (c, next) => cors({
-  origin: [c.env.ALLOWED_ORIGIN, 'https://byggplan-web.hakan-tunell.workers.dev'],
+  origin: origin => ALLOWED_ORIGINS.includes(origin) ? origin : '',
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'X-Demo-User']
 })(c, next));
