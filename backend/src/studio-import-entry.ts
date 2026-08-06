@@ -1,8 +1,19 @@
 import app from './studio-routes';
 
-const IMPORT_RUNTIME_VERSION = '2026-08-06-v6';
+const IMPORT_RUNTIME_VERSION = '2026-08-06-v7';
 
-type ImportActivity = { title?: string; description?: string; type?: string };
+type ImportClassification = {
+  category?: string;
+  code?: string;
+  label?: string;
+  source?: string;
+};
+type ImportActivity = {
+  title?: string;
+  description?: string;
+  type?: string;
+  classifications?: ImportClassification[];
+};
 type ImportTask = { title?: string; description?: string; activities?: ImportActivity[] };
 type ImportSection = { name?: string; tasks?: ImportTask[] };
 type ImportBody = {
@@ -10,6 +21,10 @@ type ImportBody = {
   targetWorkAreaId?: string;
   areaName?: string;
   sections?: ImportSection[];
+};
+
+type ClassificationBody = {
+  classifications?: ImportClassification[];
 };
 
 function clean(value: unknown): string {
@@ -34,7 +49,80 @@ function mapActivityType(value: unknown): string {
   return mapping[type] ?? 'perform';
 }
 
+function mapClassificationCategory(value: unknown): string {
+  const category = clean(value);
+  const allowed = new Set(['documentation', 'control_plan', 'requirement']);
+  return allowed.has(category) ? category : '';
+}
+
+async function ensureClassificationSchema(db: D1Database) {
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS activity_classifications (
+      id TEXT PRIMARY KEY,
+      activity_id TEXT NOT NULL,
+      category TEXT NOT NULL CHECK(category IN ('documentation','control_plan','requirement')),
+      code TEXT NOT NULL,
+      label TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'project',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(activity_id, category, code),
+      FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE CASCADE
+    )
+  `).run();
+  await db.prepare(`
+    CREATE INDEX IF NOT EXISTS idx_activity_classifications_activity
+    ON activity_classifications(activity_id)
+  `).run();
+}
+
+async function insertClassifications(
+  db: D1Database,
+  activityId: string,
+  classifications: ImportClassification[] | undefined,
+  defaultSource: string
+) {
+  for (const classification of classifications ?? []) {
+    const category = mapClassificationCategory(classification.category);
+    const code = clean(classification.code);
+    const label = clean(classification.label);
+    if (!category || !code || !label) continue;
+    await db.prepare(`
+      INSERT OR IGNORE INTO activity_classifications
+        (id,activity_id,category,code,label,source)
+      VALUES(?,?,?,?,?,?)
+    `).bind(
+      crypto.randomUUID(), activityId, category, code, label,
+      clean(classification.source) || defaultSource
+    ).run();
+  }
+}
+
 app.get('/api/studio/import-version', c => c.json({ ok: true, version: IMPORT_RUNTIME_VERSION }));
+
+app.get('/api/studio/activities/:id/classifications', async c => {
+  await ensureClassificationSchema(c.env.DB);
+  const activityId = c.req.param('id');
+  const activity = await c.env.DB.prepare('SELECT id FROM activities WHERE id=?').bind(activityId).first();
+  if (!activity) return c.json({ ok: false, error: 'Aktiviteten hittades inte.' }, 404);
+  const result = await c.env.DB.prepare(`
+    SELECT id,activity_id,category,code,label,source
+    FROM activity_classifications
+    WHERE activity_id=?
+    ORDER BY category,label
+  `).bind(activityId).all();
+  return c.json({ ok: true, classifications: result.results });
+});
+
+app.put('/api/studio/activities/:id/classifications', async c => {
+  await ensureClassificationSchema(c.env.DB);
+  const activityId = c.req.param('id');
+  const activity = await c.env.DB.prepare('SELECT id FROM activities WHERE id=?').bind(activityId).first();
+  if (!activity) return c.json({ ok: false, error: 'Aktiviteten hittades inte.' }, 404);
+  const body = await c.req.json<ClassificationBody>();
+  await c.env.DB.prepare('DELETE FROM activity_classifications WHERE activity_id=?').bind(activityId).run();
+  await insertClassifications(c.env.DB, activityId, body.classifications, 'project');
+  return c.json({ ok: true });
+});
 
 app.post('/api/studio/import-tree', async c => {
   const body = await c.req.json<ImportBody>();
@@ -53,8 +141,11 @@ app.post('/api/studio/import-tree', async c => {
   let sectionCount = 0;
   let taskCount = 0;
   let activityCount = 0;
+  let classificationCount = 0;
 
   try {
+    await ensureClassificationSchema(c.env.DB);
+
     if (workAreaId) {
       const area = await c.env.DB.prepare(
         'SELECT id,project_id FROM work_areas WHERE id=?'
@@ -119,15 +210,20 @@ app.post('/api/studio/import-tree', async c => {
           if (!activityTitle) continue;
 
           activityOrder += 10;
+          const activityId = crypto.randomUUID();
           await c.env.DB.prepare(`
             INSERT INTO activities
               (id,task_id,title,description,activity_type,required,blocking,irreversible,sort_order)
             VALUES(?,?,?,?,?,1,0,0,?)
           `).bind(
-            crypto.randomUUID(), taskId, activityTitle, clean(activity.description),
+            activityId, taskId, activityTitle, clean(activity.description),
             mapActivityType(activity.type), activityOrder
           ).run();
           activityCount += 1;
+          await insertClassifications(c.env.DB, activityId, activity.classifications, 'module');
+          classificationCount += (activity.classifications ?? []).filter(item =>
+            mapClassificationCategory(item.category) && clean(item.code) && clean(item.label)
+          ).length;
         }
       }
     }
@@ -141,11 +237,12 @@ app.post('/api/studio/import-tree', async c => {
     const databaseError = error instanceof Error ? error.message : String(error);
     return c.json({
       ok: false,
-      error: `Import v6: ${databaseError}`,
+      error: `Import v7: ${databaseError}`,
       progress: {
         sections: sectionCount,
         tasks: taskCount,
-        activities: activityCount
+        activities: activityCount,
+        classifications: classificationCount
       },
       version: IMPORT_RUNTIME_VERSION
     }, 500);
@@ -155,7 +252,12 @@ app.post('/api/studio/import-tree', async c => {
     ok: true,
     version: IMPORT_RUNTIME_VERSION,
     workAreaId,
-    created: { sections: sectionCount, tasks: taskCount, activities: activityCount }
+    created: {
+      sections: sectionCount,
+      tasks: taskCount,
+      activities: activityCount,
+      classifications: classificationCount
+    }
   }, 201);
 });
 
