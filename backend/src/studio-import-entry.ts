@@ -1,6 +1,6 @@
 import app from './studio-routes';
 
-const IMPORT_RUNTIME_VERSION = '2026-08-06-v4';
+const IMPORT_RUNTIME_VERSION = '2026-08-06-v5';
 
 type ImportActivity = { title?: string; description?: string; type?: string };
 type ImportTask = { title?: string; description?: string; activities?: ImportActivity[] };
@@ -90,9 +90,9 @@ app.post('/api/studio/import-tree', async c => {
         taskOrder += 10;
         const taskId = crypto.randomUUID();
         await c.env.DB.prepare(`
-          INSERT INTO tasks(id,work_section_id,title,description,status,sort_order,updated_at)
-          VALUES(?,?,?,?,'todo',?,datetime('now'))
-        `).bind(taskId, sectionId, taskTitle, clean(task.description), taskOrder).run();
+          INSERT INTO tasks(id,work_section_id,section,title,description,status,sort_order,updated_at)
+          VALUES(?,?,?,?,?,'todo',?,datetime('now'))
+        `).bind(taskId, sectionId, sectionName, taskTitle, clean(task.description), taskOrder).run();
         taskCount += 1;
 
         let activityOrder = 0;
@@ -123,7 +123,7 @@ app.post('/api/studio/import-tree', async c => {
     const databaseError = error instanceof Error ? error.message : String(error);
     return c.json({
       ok: false,
-      error: `Import v4: ${databaseError}`,
+      error: `Import v5: ${databaseError}`,
       progress: {
         sections: sectionCount,
         tasks: taskCount,
