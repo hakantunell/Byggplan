@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "byggplan-api",
-  "main": "src/studio-routes.ts",
+  "main": "src/studio-import-entry.ts",
   "compatibility_date": "2026-08-05",
   "d1_databases": [
     {
