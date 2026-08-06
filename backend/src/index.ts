@@ -1,276 +1,95 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 
-type Bindings = {
-  DB: D1Database;
-  FILES: R2Bucket;
-  ALLOWED_ORIGIN: string;
-  DEV_USER_EMAIL: string;
-};
+type Bindings = { DB:D1Database; FILES:R2Bucket; ALLOWED_ORIGIN:string; DEV_USER_EMAIL:string };
+const app = new Hono<{Bindings:Bindings}>();
 
-const app = new Hono<{ Bindings: Bindings }>();
+app.use('*', async (c,next)=>cors({
+  origin:[c.env.ALLOWED_ORIGIN,'https://byggplan-web.hakan-tunell.workers.dev'],
+  allowMethods:['GET','POST','PUT','OPTIONS'],
+  allowHeaders:['Content-Type']
+})(c,next));
 
-app.use('*', async (c, next) => cors({
-  origin: [c.env.ALLOWED_ORIGIN, 'https://byggplan-web.hakan-tunell.workers.dev'],
-  allowMethods: ['GET', 'POST', 'PUT', 'OPTIONS'],
-  allowHeaders: ['Content-Type']
-})(c, next));
+app.onError((error,c)=>{ console.error('Unhandled API error',error); return c.json({ok:false,error:'Ett internt fel uppstod i ByggPlan API.'},500); });
 
-app.onError((error, c) => {
-  console.error('Unhandled API error', error);
-  return c.json({ ok: false, error: 'Ett internt fel uppstod i ByggPlan API.' }, 500);
-});
-
-app.get('/health', async c => {
-  const database = await c.env.DB.prepare('SELECT 1 AS ok').first<{ ok: number }>();
-  return c.json({ ok: database?.ok === 1, service: 'byggplan-api', database: database?.ok === 1 });
-});
-
-app.get('/api/me', async c => {
-  const user = await c.env.DB.prepare(`
-    SELECT id, email, display_name, status
-    FROM users
-    WHERE email = ? AND status = 'active'
-  `).bind(c.env.DEV_USER_EMAIL).first<any>();
-
-  if (!user) return c.json({ ok: false, error: 'Ingen aktiv användare hittades.' }, 401);
-
-  const globalRoles = await c.env.DB.prepare(`
-    SELECT role_code
-    FROM global_user_roles
-    WHERE user_id = ?
-    ORDER BY role_code
-  `).bind(user.id).all();
-
-  const memberships = await c.env.DB.prepare(`
-    SELECT pm.project_id, p.name AS project_name, pm.status
-    FROM project_memberships pm
-    JOIN projects p ON p.id = pm.project_id
-    WHERE pm.user_id = ? AND pm.status = 'active'
-    ORDER BY p.sort_order, p.name
-  `).bind(user.id).all();
-
-  const projectRoles = await c.env.DB.prepare(`
-    SELECT project_id, role_code
-    FROM project_member_roles
-    WHERE user_id = ?
-    ORDER BY project_id, role_code
-  `).bind(user.id).all();
-
-  const rolesByProject = new Map<string, string[]>();
-  for (const row of projectRoles.results as any[]) {
-    const roles = rolesByProject.get(row.project_id) ?? [];
-    roles.push(row.role_code);
-    rolesByProject.set(row.project_id, roles);
-  }
-
-  const globalRoleCodes = (globalRoles.results as any[]).map(row => row.role_code as string);
-  const projects = (memberships.results as any[]).map(row => {
-    const roles = rolesByProject.get(row.project_id) ?? [];
-    return {
-      id: row.project_id,
-      name: row.project_name,
-      roles,
-      permissions: permissionsFor([...globalRoleCodes, ...roles])
-    };
-  });
-
-  return c.json({
-    user: {
-      id: user.id,
-      email: user.email,
-      displayName: user.display_name,
-      globalRoles: globalRoleCodes,
-      projects
-    },
-    developmentIdentity: true
-  });
-});
-
-app.get('/api/projects', async c => {
-  const result = await c.env.DB.prepare(`
-    SELECT p.id, p.name, p.property_designation, p.status,
-           COUNT(DISTINCT wa.id) AS work_area_count,
-           COUNT(DISTINCT ws.id) AS work_section_count,
-           COUNT(DISTINCT t.id) AS task_count
-    FROM projects p
-    LEFT JOIN work_areas wa ON wa.project_id = p.id
-    LEFT JOIN work_sections ws ON ws.work_area_id = wa.id
-    LEFT JOIN tasks t ON t.work_section_id = ws.id
-    GROUP BY p.id
-    ORDER BY p.sort_order, p.name
-  `).all();
-  return c.json({ projects: result.results });
-});
-
-app.get('/api/projects/:projectId/hierarchy', async c => {
-  const projectId = c.req.param('projectId');
-  const rows = await c.env.DB.prepare(`
-    SELECT p.id AS project_id, p.name AS project_name,
-           wa.id AS area_id, wa.name AS area_name, wa.status AS area_status,
-           ws.id AS section_id, ws.name AS section_name, ws.status AS section_status,
-           t.id AS task_id, t.title AS task_title, t.status AS task_status, t.assignee
-    FROM projects p
-    LEFT JOIN work_areas wa ON wa.project_id = p.id
-    LEFT JOIN work_sections ws ON ws.work_area_id = wa.id
-    LEFT JOIN tasks t ON t.work_section_id = ws.id
-    WHERE p.id = ?
-    ORDER BY wa.sort_order, ws.sort_order, t.sort_order
-  `).bind(projectId).all();
-  if (!rows.results.length) return c.json({ ok: false, error: 'Projektet hittades inte.' }, 404);
-
-  const first = rows.results[0] as any;
-  const project: any = { id: first.project_id, name: first.project_name, workAreas: [] };
-  const areaMap = new Map<string, any>();
-  const sectionMap = new Map<string, any>();
-  for (const row of rows.results as any[]) {
-    if (!row.area_id) continue;
-    if (!areaMap.has(row.area_id)) {
-      const area = { id: row.area_id, name: row.area_name, status: row.area_status, workSections: [] };
-      areaMap.set(row.area_id, area); project.workAreas.push(area);
-    }
-    if (!row.section_id) continue;
-    if (!sectionMap.has(row.section_id)) {
-      const section = { id: row.section_id, name: row.section_name, status: row.section_status, tasks: [] };
-      sectionMap.set(row.section_id, section); areaMap.get(row.area_id).workSections.push(section);
-    }
-    if (row.task_id) sectionMap.get(row.section_id).tasks.push({ id: row.task_id, title: row.task_title, status: row.task_status, assignee: row.assignee });
-  }
-  return c.json({ project });
-});
-
-app.get('/api/tasks', async c => {
-  const projectId = c.req.query('projectId');
-  const where = projectId ? 'WHERE p.id = ?' : '';
-  const statement = c.env.DB.prepare(`
-    SELECT t.id, t.title, t.description, t.status, t.assignee,
-           ws.id AS work_section_id, ws.name AS work_section,
-           wa.id AS work_area_id, wa.name AS work_area,
-           p.id AS project_id, p.name AS project_name
-    FROM tasks t
-    JOIN work_sections ws ON ws.id = t.work_section_id
-    JOIN work_areas wa ON wa.id = ws.work_area_id
-    JOIN projects p ON p.id = wa.project_id
-    ${where}
-    ORDER BY wa.sort_order, ws.sort_order, t.sort_order
-  `);
-  const taskRows = projectId ? await statement.bind(projectId).all() : await statement.all();
-  const grouped = new Map<string, any>();
-  for (const row of taskRows.results as any[]) grouped.set(row.id, {
-    id: row.id, projectId: row.project_id, project: row.project_name,
-    workAreaId: row.work_area_id, workArea: row.work_area,
-    workSectionId: row.work_section_id, workSection: row.work_section,
-    title: row.title, description: row.description, status: row.status,
-    assignee: row.assignee, activities: [], technical: []
-  });
-
-  if (grouped.size) {
-    const activityRows = await c.env.DB.prepare(`
-      SELECT a.id, a.task_id, a.title, a.description, a.activity_type, a.unit,
-             a.required, a.blocking, a.irreversible, a.technical_resource_id,
-             COALESCE(e.done, 0) AS done, e.value, e.completed_by, e.completed_at
-      FROM activities a
-      LEFT JOIN activity_entries e ON e.activity_id = a.id
-      ORDER BY a.task_id, a.sort_order
-    `).all();
-    for (const row of activityRows.results as any[]) {
-      const task = grouped.get(row.task_id);
-      if (!task) continue;
-      task.activities.push({
-        id: row.id, title: row.title, description: row.description,
-        type: row.activity_type, unit: row.unit ?? undefined,
-        required: Boolean(row.required), blocking: Boolean(row.blocking),
-        irreversible: Boolean(row.irreversible), technicalResourceId: row.technical_resource_id ?? undefined,
-        done: Boolean(row.done), value: row.value ?? undefined,
-        completedBy: row.completed_by ?? undefined, completedAt: row.completed_at ?? undefined
-      });
-    }
-  }
-
-  const projectIds = [...new Set([...grouped.values()].map(task => task.projectId))];
-  for (const id of projectIds) {
-    const resources = await c.env.DB.prepare(`
-      SELECT tr.id, tr.resource_type, tr.title, tr.summary, tr.revision,
-             tr.object_key, tr.external_url, tr.content_text,
-             l.entity_type, l.entity_id, l.sort_order
-      FROM technical_resources tr
-      JOIN technical_resource_links l ON l.technical_resource_id = tr.id
-      WHERE tr.project_id = ? AND tr.status = 'current'
-      ORDER BY l.sort_order, tr.title
-    `).bind(id).all();
-    for (const row of resources.results as any[]) {
-      const resource = {
-        id: row.id, type: mapResourceType(row.resource_type), title: row.title,
-        summary: row.summary ?? '', revision: row.revision ?? undefined,
-        details: row.content_text ? String(row.content_text).split('\n').filter(Boolean) : [],
-        objectKey: row.object_key ?? undefined, externalUrl: row.external_url ?? undefined,
-        sourceLevel: row.entity_type
-      };
-      for (const task of grouped.values()) {
-        if (task.projectId !== id) continue;
-        const applies = (row.entity_type === 'project' && row.entity_id === task.projectId)
-          || (row.entity_type === 'work_area' && row.entity_id === task.workAreaId)
-          || (row.entity_type === 'work_section' && row.entity_id === task.workSectionId)
-          || (row.entity_type === 'task' && row.entity_id === task.id);
-        if (applies && !task.technical.some((item: any) => item.id === resource.id)) task.technical.push(resource);
-      }
-    }
-  }
-  return c.json({ tasks: [...grouped.values()] });
-});
-
-app.put('/api/activities/:id', async c => {
-  const id = c.req.param('id');
-  const body = await c.req.json<{ value?: string | null; done?: boolean; completedBy?: string }>();
-  const exists = await c.env.DB.prepare('SELECT id FROM activities WHERE id = ?').bind(id).first();
-  if (!exists) return c.json({ ok: false, error: 'Aktiviteten hittades inte.' }, 404);
-  await c.env.DB.prepare(`
-    INSERT INTO activity_entries (id, activity_id, value, done, completed_by, completed_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, CASE WHEN ? = 1 THEN datetime('now') ELSE NULL END, datetime('now'))
-    ON CONFLICT(activity_id) DO UPDATE SET
-      value=excluded.value,
-      done=excluded.done,
-      completed_by=excluded.completed_by,
-      completed_at=CASE WHEN excluded.done = 1 THEN datetime('now') ELSE NULL END,
-      updated_at=datetime('now')
-  `).bind(crypto.randomUUID(), id, body.value ?? null, body.done ? 1 : 0, body.completedBy ?? null, body.done ? 1 : 0).run();
-  return c.json({ ok: true });
-});
-
-app.post('/api/tasks/:id/review', async c => {
-  const id = c.req.param('id');
-  const missing = await c.env.DB.prepare(`
-    SELECT COUNT(*) AS count
-    FROM activities a
-    LEFT JOIN activity_entries e ON e.activity_id = a.id
-    WHERE a.task_id = ? AND a.required = 1 AND COALESCE(e.done, 0) = 0
-  `).bind(id).first<{ count: number }>();
-  if ((missing?.count ?? 0) > 0) return c.json({ ok: false, error: `${missing?.count} obligatoriska aktiviteter återstår.` }, 409);
-  await c.env.DB.prepare("UPDATE tasks SET status='review', updated_at=datetime('now') WHERE id=?").bind(id).run();
-  await c.env.DB.prepare("INSERT INTO notifications (id, type, task_id, message, created_at) VALUES (?, 'review', ?, ?, datetime('now'))")
-    .bind(crypto.randomUUID(), id, 'Moment redo för arbetsledarens kontroll').run();
-  return c.json({ ok: true });
-});
-
-function permissionsFor(roles: string[]) {
-  const permissions = new Set<string>();
-  if (roles.includes('worker') || roles.includes('supervisor') || roles.includes('admin')) {
-    permissions.add('project:view');
-    permissions.add('activity:update');
-    permissions.add('technical:view');
-  }
-  if (roles.includes('supervisor') || roles.includes('admin')) {
-    permissions.add('task:approve');
-    permissions.add('task:reject');
-    permissions.add('work:assign');
-  }
-  if (roles.includes('admin')) permissions.add('admin:access');
-  return [...permissions];
+async function currentUser(c:any){
+  return c.env.DB.prepare("SELECT id,email,display_name,status FROM users WHERE email=? AND status='active'").bind(c.env.DEV_USER_EMAIL).first<any>();
 }
 
-function mapResourceType(type: string) {
-  if (type === 'technical_data' || type === 'note' || type === 'link') return 'text';
-  return type;
-}
+app.get('/health',async c=>{
+  const database=await c.env.DB.prepare('SELECT 1 AS ok').first<{ok:number}>();
+  return c.json({ok:database?.ok===1,service:'byggplan-api',database:database?.ok===1});
+});
 
+app.get('/api/me',async c=>{
+  const user=await currentUser(c);
+  if(!user)return c.json({ok:false,error:'Ingen aktiv användare hittades.'},401);
+  const globalRoles=await c.env.DB.prepare('SELECT role_code FROM global_user_roles WHERE user_id=? ORDER BY role_code').bind(user.id).all();
+  const memberships=await c.env.DB.prepare(`SELECT pm.project_id,p.name AS project_name FROM project_memberships pm JOIN projects p ON p.id=pm.project_id WHERE pm.user_id=? AND pm.status='active' ORDER BY p.sort_order,p.name`).bind(user.id).all();
+  const projectRoles=await c.env.DB.prepare('SELECT project_id,role_code FROM project_member_roles WHERE user_id=? ORDER BY project_id,role_code').bind(user.id).all();
+  const rolesByProject=new Map<string,string[]>();
+  for(const row of projectRoles.results as any[]){const roles=rolesByProject.get(row.project_id)??[];roles.push(row.role_code);rolesByProject.set(row.project_id,roles);}
+  const globalRoleCodes=(globalRoles.results as any[]).map(r=>r.role_code as string);
+  return c.json({user:{id:user.id,email:user.email,displayName:user.display_name,globalRoles:globalRoleCodes,projects:(memberships.results as any[]).map(row=>{const roles=rolesByProject.get(row.project_id)??[];return{id:row.project_id,name:row.project_name,roles,permissions:permissionsFor([...globalRoleCodes,...roles])};})},developmentIdentity:true});
+});
+
+app.get('/api/projects',async c=>{
+  const result=await c.env.DB.prepare(`SELECT p.id,p.name,p.property_designation,p.status,COUNT(DISTINCT wa.id) AS work_area_count,COUNT(DISTINCT ws.id) AS work_section_count,COUNT(DISTINCT t.id) AS task_count FROM projects p LEFT JOIN work_areas wa ON wa.project_id=p.id LEFT JOIN work_sections ws ON ws.work_area_id=wa.id LEFT JOIN tasks t ON t.work_section_id=ws.id GROUP BY p.id ORDER BY p.sort_order,p.name`).all();
+  return c.json({projects:result.results});
+});
+
+app.get('/api/tasks',async c=>{
+  const projectId=c.req.query('projectId');
+  const statement=c.env.DB.prepare(`SELECT t.id,t.title,t.description,t.status,t.assignee,ws.id AS work_section_id,ws.name AS work_section,wa.id AS work_area_id,wa.name AS work_area,p.id AS project_id,p.name AS project_name FROM tasks t JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id JOIN projects p ON p.id=wa.project_id ${projectId?'WHERE p.id=?':''} ORDER BY wa.sort_order,ws.sort_order,t.sort_order`);
+  const rows=projectId?await statement.bind(projectId).all():await statement.all();
+  const grouped=new Map<string,any>();
+  for(const row of rows.results as any[])grouped.set(row.id,{id:row.id,projectId:row.project_id,project:row.project_name,workAreaId:row.work_area_id,workArea:row.work_area,workSectionId:row.work_section_id,workSection:row.work_section,title:row.title,description:row.description,status:row.status,assignee:row.assignee,activities:[],technical:[]});
+
+  if(grouped.size){
+    const activityRows=await c.env.DB.prepare(`SELECT a.id,a.task_id,a.title,a.description,a.activity_type,a.unit,a.required,a.blocking,a.irreversible,a.technical_resource_id,COALESCE(e.done,0) AS done,e.value,e.completed_by,e.completed_at FROM activities a LEFT JOIN activity_entries e ON e.activity_id=a.id ORDER BY a.task_id,a.sort_order`).all();
+    for(const row of activityRows.results as any[]){const task=grouped.get(row.task_id);if(!task)continue;task.activities.push({id:row.id,title:row.title,description:row.description,type:row.activity_type,unit:row.unit??undefined,required:Boolean(row.required),blocking:Boolean(row.blocking),irreversible:Boolean(row.irreversible),technicalResourceId:row.technical_resource_id??undefined,done:Boolean(row.done),value:row.value??undefined,completedBy:row.completed_by??undefined,completedAt:row.completed_at??undefined,documentationFields:[],documentationProfiles:[]});}
+
+    const fieldRows=await c.env.DB.prepare(`SELECT f.id,f.activity_id,f.field_type,f.label,f.help_text,f.unit,f.required,f.minimum_items,f.maximum_items,f.minimum_value,f.maximum_value,f.options_json,f.sort_order,e.id AS entry_id,e.value_text,e.value_number,e.value_boolean,e.object_key,e.original_name,e.content_type,e.note,e.created_at FROM activity_documentation_fields f LEFT JOIN activity_documentation_entries e ON e.field_id=f.id ORDER BY f.activity_id,f.sort_order,e.created_at`).all();
+    const activities=new Map<string,any>();for(const task of grouped.values())for(const activity of task.activities)activities.set(activity.id,activity);
+    for(const row of fieldRows.results as any[]){const activity=activities.get(row.activity_id);if(!activity)continue;let field=activity.documentationFields.find((x:any)=>x.id===row.id);if(!field){field={id:row.id,type:row.field_type,label:row.label,helpText:row.help_text??undefined,unit:row.unit??undefined,required:Boolean(row.required),minimumItems:row.minimum_items??undefined,maximumItems:row.maximum_items??undefined,minimumValue:row.minimum_value??undefined,maximumValue:row.maximum_value??undefined,options:row.options_json?JSON.parse(row.options_json):undefined,entries:[]};activity.documentationFields.push(field);}if(row.entry_id)field.entries.push({id:row.entry_id,valueText:row.value_text??undefined,valueNumber:row.value_number??undefined,valueBoolean:row.value_boolean==null?undefined:Boolean(row.value_boolean),objectKey:row.object_key??undefined,originalName:row.original_name??undefined,contentType:row.content_type??undefined,note:row.note??undefined,createdAt:row.created_at});}
+
+    const profileRows=await c.env.DB.prepare(`SELECT adp.activity_id,dp.id,dp.code,dp.name,dp.profile_type FROM activity_documentation_profiles adp JOIN documentation_profiles dp ON dp.id=adp.documentation_profile_id WHERE dp.status='active' ORDER BY dp.sort_order,dp.name`).all();
+    for(const row of profileRows.results as any[]){const activity=activities.get(row.activity_id);if(activity)activity.documentationProfiles.push({id:row.id,code:row.code,name:row.name,type:row.profile_type});}
+  }
+
+  const projectIds=[...new Set([...grouped.values()].map(t=>t.projectId))];
+  for(const id of projectIds){const resources=await c.env.DB.prepare(`SELECT tr.id,tr.resource_type,tr.title,tr.summary,tr.revision,tr.object_key,tr.external_url,tr.content_text,l.entity_type,l.entity_id,l.sort_order FROM technical_resources tr JOIN technical_resource_links l ON l.technical_resource_id=tr.id WHERE tr.project_id=? AND tr.status='current' ORDER BY l.sort_order,tr.title`).bind(id).all();for(const row of resources.results as any[]){const resource={id:row.id,type:mapResourceType(row.resource_type),title:row.title,summary:row.summary??'',revision:row.revision??undefined,details:row.content_text?String(row.content_text).split('\n').filter(Boolean):[],objectKey:row.object_key??undefined,externalUrl:row.external_url??undefined,sourceLevel:row.entity_type};for(const task of grouped.values()){if(task.projectId!==id)continue;const applies=(row.entity_type==='project'&&row.entity_id===task.projectId)||(row.entity_type==='work_area'&&row.entity_id===task.workAreaId)||(row.entity_type==='work_section'&&row.entity_id===task.workSectionId)||(row.entity_type==='task'&&row.entity_id===task.id);if(applies&&!task.technical.some((x:any)=>x.id===resource.id))task.technical.push(resource);}}}
+  return c.json({tasks:[...grouped.values()]});
+});
+
+app.put('/api/activities/:id',async c=>{
+  const id=c.req.param('id');const body=await c.req.json<{value?:string|null;done?:boolean;completedBy?:string}>();
+  const user=await currentUser(c);if(!user)return c.json({ok:false,error:'Ingen aktiv användare.'},401);
+  const exists=await c.env.DB.prepare('SELECT id FROM activities WHERE id=?').bind(id).first();if(!exists)return c.json({ok:false,error:'Aktiviteten hittades inte.'},404);
+  await c.env.DB.prepare(`INSERT INTO activity_entries(id,activity_id,value,done,completed_by,completed_at,updated_at) VALUES(?,?,?,?,?,CASE WHEN ?=1 THEN datetime('now') ELSE NULL END,datetime('now')) ON CONFLICT(activity_id) DO UPDATE SET value=excluded.value,done=excluded.done,completed_by=excluded.completed_by,completed_at=CASE WHEN excluded.done=1 THEN datetime('now') ELSE NULL END,updated_at=datetime('now')`).bind(crypto.randomUUID(),id,body.value??null,body.done?1:0,user.id,body.done?1:0).run();
+  return c.json({ok:true});
+});
+
+app.put('/api/documentation-fields/:fieldId',async c=>{
+  const fieldId=c.req.param('fieldId');const body=await c.req.json<{valueText?:string|null;valueNumber?:number|null;valueBoolean?:boolean|null;note?:string|null}>();
+  const user=await currentUser(c);if(!user)return c.json({ok:false,error:'Ingen aktiv användare.'},401);
+  const field=await c.env.DB.prepare('SELECT id,field_type FROM activity_documentation_fields WHERE id=?').bind(fieldId).first<any>();if(!field)return c.json({ok:false,error:'Dokumentationsfältet hittades inte.'},404);
+  if(field.field_type==='photo'||field.field_type==='file')return c.json({ok:false,error:'Filer laddas upp via fil-API:t.'},400);
+  await c.env.DB.prepare('DELETE FROM activity_documentation_entries WHERE field_id=?').bind(fieldId).run();
+  const hasValue=body.valueText!=null&&body.valueText!==''||body.valueNumber!=null||body.valueBoolean!=null||body.note!=null&&body.note!=='';
+  if(hasValue)await c.env.DB.prepare(`INSERT INTO activity_documentation_entries(id,field_id,user_id,value_text,value_number,value_boolean,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))`).bind(crypto.randomUUID(),fieldId,user.id,body.valueText??null,body.valueNumber??null,body.valueBoolean==null?null:(body.valueBoolean?1:0),body.note??null).run();
+  return c.json({ok:true});
+});
+
+app.post('/api/tasks/:id/review',async c=>{
+  const id=c.req.param('id');
+  const missing=await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM activities a LEFT JOIN activity_entries e ON e.activity_id=a.id WHERE a.task_id=? AND a.required=1 AND COALESCE(e.done,0)=0`).bind(id).first<{count:number}>();
+  if((missing?.count??0)>0)return c.json({ok:false,error:`${missing?.count} obligatoriska aktiviteter återstår.`},409);
+  await c.env.DB.prepare("UPDATE tasks SET status='review',updated_at=datetime('now') WHERE id=?").bind(id).run();
+  await c.env.DB.prepare("INSERT INTO notifications(id,type,task_id,message,created_at) VALUES(?,'review',?,?,datetime('now'))").bind(crypto.randomUUID(),id,'Moment redo för arbetsledarens kontroll').run();
+  return c.json({ok:true});
+});
+
+function permissionsFor(roles:string[]){const p=new Set<string>();if(roles.some(r=>['worker','supervisor','admin'].includes(r))){p.add('project:view');p.add('activity:update');p.add('technical:view');}if(roles.some(r=>['supervisor','admin'].includes(r))){p.add('task:approve');p.add('task:reject');p.add('work:assign');}if(roles.includes('admin'))p.add('admin:access');return[...p];}
+function mapResourceType(type:string){return ['technical_data','note','link'].includes(type)?'text':type;}
 export default app;
