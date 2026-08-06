@@ -1,6 +1,7 @@
 import app from './studio-routes';
+import { registerControlPlanRoutes } from './control-plan-routes';
 
-const IMPORT_RUNTIME_VERSION = '2026-08-06-v7';
+const IMPORT_RUNTIME_VERSION = '2026-08-06-v8';
 
 type ImportClassification = {
   category?: string;
@@ -237,7 +238,7 @@ app.post('/api/studio/import-tree', async c => {
     const databaseError = error instanceof Error ? error.message : String(error);
     return c.json({
       ok: false,
-      error: `Import v7: ${databaseError}`,
+      error: `Import v8: ${databaseError}`,
       progress: {
         sections: sectionCount,
         tasks: taskCount,
@@ -260,5 +261,7 @@ app.post('/api/studio/import-tree', async c => {
     }
   }, 201);
 });
+
+registerControlPlanRoutes(app as any);
 
 export default app;
