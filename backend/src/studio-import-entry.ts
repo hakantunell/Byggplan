@@ -1,6 +1,6 @@
 import app from './studio-routes';
 
-const IMPORT_RUNTIME_VERSION = '2026-08-06-v3';
+const IMPORT_RUNTIME_VERSION = '2026-08-06-v4';
 
 type ImportActivity = { title?: string; description?: string; type?: string };
 type ImportTask = { title?: string; description?: string; activities?: ImportActivity[] };
@@ -120,9 +120,15 @@ app.post('/api/studio/import-tree', async c => {
     }
   } catch (error) {
     console.error('Studio tree import failed', error);
+    const databaseError = error instanceof Error ? error.message : String(error);
     return c.json({
       ok: false,
-      error: `Import v3 avbröts efter ${sectionCount} avsnitt, ${taskCount} moment och ${activityCount} aktiviteter.`,
+      error: `Import v4: ${databaseError}`,
+      progress: {
+        sections: sectionCount,
+        tasks: taskCount,
+        activities: activityCount
+      },
       version: IMPORT_RUNTIME_VERSION
     }, 500);
   }
