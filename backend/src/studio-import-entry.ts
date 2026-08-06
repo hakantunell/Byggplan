@@ -1,5 +1,7 @@
 import app from './studio-routes';
 
+const IMPORT_RUNTIME_VERSION = '2026-08-06-v3';
+
 type ImportActivity = { title?: string; description?: string; type?: string };
 type ImportTask = { title?: string; description?: string; activities?: ImportActivity[] };
 type ImportSection = { name?: string; tasks?: ImportTask[] };
@@ -14,6 +16,8 @@ function clean(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+app.get('/api/studio/import-version', c => c.json({ ok: true, version: IMPORT_RUNTIME_VERSION }));
+
 app.post('/api/studio/import-tree', async c => {
   const body = await c.req.json<ImportBody>();
   const projectId = clean(body.projectId);
@@ -22,7 +26,7 @@ app.post('/api/studio/import-tree', async c => {
   const sections = Array.isArray(body.sections) ? body.sections : [];
 
   if (!sections.length) {
-    return c.json({ ok: false, error: 'Importen innehåller inga arbetsavsnitt.' }, 400);
+    return c.json({ ok: false, error: 'Importen innehåller inga arbetsavsnitt.', version: IMPORT_RUNTIME_VERSION }, 400);
   }
 
   let workAreaId = targetWorkAreaId;
@@ -38,9 +42,9 @@ app.post('/api/studio/import-tree', async c => {
         'SELECT id,project_id FROM work_areas WHERE id=?'
       ).bind(workAreaId).first<{ id: string; project_id: string }>();
 
-      if (!area) return c.json({ ok: false, error: 'Målarbetsområdet hittades inte.' }, 404);
+      if (!area) return c.json({ ok: false, error: 'Målarbetsområdet hittades inte.', version: IMPORT_RUNTIME_VERSION }, 404);
       if (projectId && area.project_id !== projectId) {
-        return c.json({ ok: false, error: 'Arbetsområdet tillhör inte valt projekt.' }, 409);
+        return c.json({ ok: false, error: 'Arbetsområdet tillhör inte valt projekt.', version: IMPORT_RUNTIME_VERSION }, 409);
       }
 
       const orderRow = await c.env.DB.prepare(
@@ -49,12 +53,12 @@ app.post('/api/studio/import-tree', async c => {
       sectionOrder = Number(orderRow?.max_order ?? 0);
     } else {
       if (!projectId || !areaName) {
-        return c.json({ ok: false, error: 'Projekt och namn på arbetsområde krävs.' }, 400);
+        return c.json({ ok: false, error: 'Projekt och namn på arbetsområde krävs.', version: IMPORT_RUNTIME_VERSION }, 400);
       }
 
       const project = await c.env.DB.prepare('SELECT id FROM projects WHERE id=?')
         .bind(projectId).first();
-      if (!project) return c.json({ ok: false, error: 'Projektet hittades inte.' }, 404);
+      if (!project) return c.json({ ok: false, error: 'Projektet hittades inte.', version: IMPORT_RUNTIME_VERSION }, 404);
 
       const orderRow = await c.env.DB.prepare(
         'SELECT COALESCE(MAX(sort_order),0)+10 AS next_order FROM work_areas WHERE project_id=?'
@@ -112,18 +116,20 @@ app.post('/api/studio/import-tree', async c => {
 
     if (!sectionCount) {
       if (createdArea) await c.env.DB.prepare('DELETE FROM work_areas WHERE id=?').bind(workAreaId).run();
-      return c.json({ ok: false, error: 'Importen innehåller inga giltiga arbetsavsnitt.' }, 400);
+      return c.json({ ok: false, error: 'Importen innehåller inga giltiga arbetsavsnitt.', version: IMPORT_RUNTIME_VERSION }, 400);
     }
   } catch (error) {
     console.error('Studio tree import failed', error);
     return c.json({
       ok: false,
-      error: `Importen avbröts efter ${sectionCount} avsnitt, ${taskCount} moment och ${activityCount} aktiviteter.`
+      error: `Import v3 avbröts efter ${sectionCount} avsnitt, ${taskCount} moment och ${activityCount} aktiviteter.`,
+      version: IMPORT_RUNTIME_VERSION
     }, 500);
   }
 
   return c.json({
     ok: true,
+    version: IMPORT_RUNTIME_VERSION,
     workAreaId,
     created: { sections: sectionCount, tasks: taskCount, activities: activityCount }
   }, 201);
