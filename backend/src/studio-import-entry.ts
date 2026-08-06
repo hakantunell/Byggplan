@@ -1,6 +1,6 @@
 import app from './studio-routes';
 
-const IMPORT_RUNTIME_VERSION = '2026-08-06-v5';
+const IMPORT_RUNTIME_VERSION = '2026-08-06-v6';
 
 type ImportActivity = { title?: string; description?: string; type?: string };
 type ImportTask = { title?: string; description?: string; activities?: ImportActivity[] };
@@ -14,6 +14,24 @@ type ImportBody = {
 
 function clean(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function mapActivityType(value: unknown): string {
+  const type = clean(value);
+  const mapping: Record<string, string> = {
+    work: 'perform',
+    perform: 'perform',
+    documentation: 'document',
+    document: 'document',
+    measurement: 'measurement',
+    control: 'check',
+    check: 'check',
+    approval: 'approval',
+    wait: 'note',
+    note: 'note',
+    choice: 'choice'
+  };
+  return mapping[type] ?? 'perform';
 }
 
 app.get('/api/studio/import-version', c => c.json({ ok: true, version: IMPORT_RUNTIME_VERSION }));
@@ -107,7 +125,7 @@ app.post('/api/studio/import-tree', async c => {
             VALUES(?,?,?,?,?,1,0,0,?)
           `).bind(
             crypto.randomUUID(), taskId, activityTitle, clean(activity.description),
-            clean(activity.type) || 'work', activityOrder
+            mapActivityType(activity.type), activityOrder
           ).run();
           activityCount += 1;
         }
@@ -123,7 +141,7 @@ app.post('/api/studio/import-tree', async c => {
     const databaseError = error instanceof Error ? error.message : String(error);
     return c.json({
       ok: false,
-      error: `Import v5: ${databaseError}`,
+      error: `Import v6: ${databaseError}`,
       progress: {
         sections: sectionCount,
         tasks: taskCount,
