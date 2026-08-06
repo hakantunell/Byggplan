@@ -1,7 +1,13 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 
-type Bindings = { DB: D1Database; FILES: R2Bucket; ALLOWED_ORIGIN: string };
+type Bindings = {
+  DB: D1Database;
+  FILES: R2Bucket;
+  ALLOWED_ORIGIN: string;
+  DEV_USER_EMAIL: string;
+};
+
 const app = new Hono<{ Bindings: Bindings }>();
 
 app.use('*', async (c, next) => cors({
@@ -18,6 +24,67 @@ app.onError((error, c) => {
 app.get('/health', async c => {
   const database = await c.env.DB.prepare('SELECT 1 AS ok').first<{ ok: number }>();
   return c.json({ ok: database?.ok === 1, service: 'byggplan-api', database: database?.ok === 1 });
+});
+
+app.get('/api/me', async c => {
+  const user = await c.env.DB.prepare(`
+    SELECT id, email, display_name, status
+    FROM users
+    WHERE email = ? AND status = 'active'
+  `).bind(c.env.DEV_USER_EMAIL).first<any>();
+
+  if (!user) return c.json({ ok: false, error: 'Ingen aktiv användare hittades.' }, 401);
+
+  const globalRoles = await c.env.DB.prepare(`
+    SELECT role_code
+    FROM global_user_roles
+    WHERE user_id = ?
+    ORDER BY role_code
+  `).bind(user.id).all();
+
+  const memberships = await c.env.DB.prepare(`
+    SELECT pm.project_id, p.name AS project_name, pm.status
+    FROM project_memberships pm
+    JOIN projects p ON p.id = pm.project_id
+    WHERE pm.user_id = ? AND pm.status = 'active'
+    ORDER BY p.sort_order, p.name
+  `).bind(user.id).all();
+
+  const projectRoles = await c.env.DB.prepare(`
+    SELECT project_id, role_code
+    FROM project_member_roles
+    WHERE user_id = ?
+    ORDER BY project_id, role_code
+  `).bind(user.id).all();
+
+  const rolesByProject = new Map<string, string[]>();
+  for (const row of projectRoles.results as any[]) {
+    const roles = rolesByProject.get(row.project_id) ?? [];
+    roles.push(row.role_code);
+    rolesByProject.set(row.project_id, roles);
+  }
+
+  const globalRoleCodes = (globalRoles.results as any[]).map(row => row.role_code as string);
+  const projects = (memberships.results as any[]).map(row => {
+    const roles = rolesByProject.get(row.project_id) ?? [];
+    return {
+      id: row.project_id,
+      name: row.project_name,
+      roles,
+      permissions: permissionsFor([...globalRoleCodes, ...roles])
+    };
+  });
+
+  return c.json({
+    user: {
+      id: user.id,
+      email: user.email,
+      displayName: user.display_name,
+      globalRoles: globalRoleCodes,
+      projects
+    },
+    developmentIdentity: true
+  });
 });
 
 app.get('/api/projects', async c => {
@@ -184,6 +251,22 @@ app.post('/api/tasks/:id/review', async c => {
     .bind(crypto.randomUUID(), id, 'Moment redo för arbetsledarens kontroll').run();
   return c.json({ ok: true });
 });
+
+function permissionsFor(roles: string[]) {
+  const permissions = new Set<string>();
+  if (roles.includes('worker') || roles.includes('supervisor') || roles.includes('admin')) {
+    permissions.add('project:view');
+    permissions.add('activity:update');
+    permissions.add('technical:view');
+  }
+  if (roles.includes('supervisor') || roles.includes('admin')) {
+    permissions.add('task:approve');
+    permissions.add('task:reject');
+    permissions.add('work:assign');
+  }
+  if (roles.includes('admin')) permissions.add('admin:access');
+  return [...permissions];
+}
 
 function mapResourceType(type: string) {
   if (type === 'technical_data' || type === 'note' || type === 'link') return 'text';
