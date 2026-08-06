@@ -17,6 +17,7 @@
     }
   ],
   "vars": {
-    "ALLOWED_ORIGIN": "https://byggplan.tunell.org"
+    "ALLOWED_ORIGIN": "https://byggplan.tunell.org",
+    "DEV_USER_EMAIL": "hakan@byggplan.local"
   }
 }
