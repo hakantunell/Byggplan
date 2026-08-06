@@ -6,7 +6,7 @@ const app = new Hono<{Bindings:Bindings}>();
 
 app.use('*', async (c,next)=>cors({
   origin:[c.env.ALLOWED_ORIGIN,'https://byggplan-web.hakan-tunell.workers.dev'],
-  allowMethods:['GET','POST','PUT','OPTIONS'],
+  allowMethods:['GET','POST','PUT','DELETE','OPTIONS'],
   allowHeaders:['Content-Type']
 })(c,next));
 
@@ -81,6 +81,40 @@ app.put('/api/documentation-fields/:fieldId',async c=>{
   return c.json({ok:true});
 });
 
+app.post('/api/documentation-fields/:fieldId/files',async c=>{
+  const fieldId=c.req.param('fieldId');
+  const user=await currentUser(c);if(!user)return c.json({ok:false,error:'Ingen aktiv användare.'},401);
+  const field=await c.env.DB.prepare(`SELECT f.id,f.field_type,f.maximum_items,a.id AS activity_id,t.id AS task_id,p.id AS project_id FROM activity_documentation_fields f JOIN activities a ON a.id=f.activity_id JOIN tasks t ON t.id=a.task_id JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id JOIN projects p ON p.id=wa.project_id WHERE f.id=?`).bind(fieldId).first<any>();
+  if(!field)return c.json({ok:false,error:'Dokumentationsfältet hittades inte.'},404);
+  if(field.field_type!=='photo'&&field.field_type!=='file')return c.json({ok:false,error:'Fältet tar inte emot filer.'},400);
+  const form=await c.req.parseBody();
+  const upload=form.file;
+  if(!(upload instanceof File))return c.json({ok:false,error:'Ingen fil valdes.'},400);
+  if(upload.size===0)return c.json({ok:false,error:'Filen är tom.'},400);
+  if(upload.size>20*1024*1024)return c.json({ok:false,error:'Filen får vara högst 20 MB.'},413);
+  if(field.field_type==='photo'&&!upload.type.startsWith('image/'))return c.json({ok:false,error:'Det här fältet kräver en bild.'},415);
+  const count=await c.env.DB.prepare('SELECT COUNT(*) AS count FROM activity_documentation_entries WHERE field_id=? AND object_key IS NOT NULL').bind(fieldId).first<{count:number}>();
+  if(field.maximum_items!=null&&(count?.count??0)>=field.maximum_items)return c.json({ok:false,error:`Fältet tillåter högst ${field.maximum_items} filer.`},409);
+  const entryId=crypto.randomUUID();
+  const safeName=sanitizeFileName(upload.name||'upload');
+  const objectKey=`projects/${field.project_id}/documentation/${field.activity_id}/${fieldId}/${entryId}-${safeName}`;
+  await c.env.FILES.put(objectKey,upload.stream(),{httpMetadata:{contentType:upload.type||'application/octet-stream'},customMetadata:{fieldId,activityId:field.activity_id,taskId:field.task_id,projectId:field.project_id,userId:user.id,originalName:upload.name||safeName}});
+  try{
+    await c.env.DB.prepare(`INSERT INTO activity_documentation_entries(id,field_id,user_id,object_key,original_name,content_type,created_at,updated_at) VALUES(?,?,?,?,?,?,datetime('now'),datetime('now'))`).bind(entryId,fieldId,user.id,objectKey,upload.name||safeName,upload.type||'application/octet-stream').run();
+  }catch(error){await c.env.FILES.delete(objectKey);throw error;}
+  return c.json({ok:true,entry:{id:entryId,objectKey,originalName:upload.name||safeName,contentType:upload.type||'application/octet-stream'}},201);
+});
+
+app.delete('/api/documentation-entries/:entryId',async c=>{
+  const entryId=c.req.param('entryId');
+  const user=await currentUser(c);if(!user)return c.json({ok:false,error:'Ingen aktiv användare.'},401);
+  const entry=await c.env.DB.prepare('SELECT id,object_key FROM activity_documentation_entries WHERE id=?').bind(entryId).first<any>();
+  if(!entry)return c.json({ok:false,error:'Dokumentationen hittades inte.'},404);
+  if(entry.object_key)await c.env.FILES.delete(entry.object_key);
+  await c.env.DB.prepare('DELETE FROM activity_documentation_entries WHERE id=?').bind(entryId).run();
+  return c.json({ok:true});
+});
+
 app.post('/api/tasks/:id/review',async c=>{
   const id=c.req.param('id');
   const missing=await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM activities a LEFT JOIN activity_entries e ON e.activity_id=a.id WHERE a.task_id=? AND a.required=1 AND COALESCE(e.done,0)=0`).bind(id).first<{count:number}>();
@@ -90,6 +124,7 @@ app.post('/api/tasks/:id/review',async c=>{
   return c.json({ok:true});
 });
 
+function sanitizeFileName(name:string){const normalized=name.normalize('NFKD').replace(/[\u0300-\u036f]/g,'');const safe=normalized.replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/-+/g,'-').replace(/^[-.]+|[-.]+$/g,'');return safe.slice(0,120)||'upload';}
 function permissionsFor(roles:string[]){const p=new Set<string>();if(roles.some(r=>['worker','supervisor','admin'].includes(r))){p.add('project:view');p.add('activity:update');p.add('technical:view');}if(roles.some(r=>['supervisor','admin'].includes(r))){p.add('task:approve');p.add('task:reject');p.add('work:assign');}if(roles.includes('admin'))p.add('admin:access');return[...p];}
 function mapResourceType(type:string){return ['technical_data','note','link'].includes(type)?'text':type;}
 export default app;
