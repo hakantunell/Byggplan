@@ -16,6 +16,41 @@ async function nextSortOrder(db: D1Database, table: string, parentColumn: string
   return row?.next_order ?? 10;
 }
 
+app.get('/api/studio/structure', async c => {
+  const projectId = c.req.query('projectId');
+  if (!projectId) return c.json({ ok: false, error: 'Projekt saknas.' }, 400);
+  const [areas, sections, tasks, activities] = await Promise.all([
+    c.env.DB.prepare(`SELECT id,project_id,name,sort_order FROM work_areas WHERE project_id=? ORDER BY sort_order,name`).bind(projectId).all(),
+    c.env.DB.prepare(`
+      SELECT ws.id,ws.work_area_id,ws.name,ws.sort_order
+      FROM work_sections ws JOIN work_areas wa ON wa.id=ws.work_area_id
+      WHERE wa.project_id=? ORDER BY wa.sort_order,ws.sort_order,ws.name
+    `).bind(projectId).all(),
+    c.env.DB.prepare(`
+      SELECT t.id,t.work_section_id,t.title,t.description,t.status,t.sort_order
+      FROM tasks t
+      JOIN work_sections ws ON ws.id=t.work_section_id
+      JOIN work_areas wa ON wa.id=ws.work_area_id
+      WHERE wa.project_id=? ORDER BY wa.sort_order,ws.sort_order,t.sort_order,t.title
+    `).bind(projectId).all(),
+    c.env.DB.prepare(`
+      SELECT a.id,a.task_id,a.title,a.description,a.activity_type,a.required,a.sort_order,
+             (SELECT COUNT(*) FROM activity_documentation_fields f WHERE f.activity_id=a.id) AS documentation_field_count
+      FROM activities a
+      JOIN tasks t ON t.id=a.task_id
+      JOIN work_sections ws ON ws.id=t.work_section_id
+      JOIN work_areas wa ON wa.id=ws.work_area_id
+      WHERE wa.project_id=? ORDER BY wa.sort_order,ws.sort_order,t.sort_order,a.sort_order,a.title
+    `).bind(projectId).all()
+  ]);
+  return c.json({
+    areas: areas.results,
+    sections: sections.results,
+    tasks: tasks.results,
+    activities: activities.results
+  });
+});
+
 app.post('/api/studio/work-areas', async c => {
   const body = await c.req.json<JsonBody>();
   const projectId = text(body.projectId);
