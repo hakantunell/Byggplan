@@ -10,6 +10,10 @@ type ImportedPoint = {
   method?: string;
   responsibleRole?: string;
   evidenceRequired?: string;
+  categoryCode?: string;
+  categoryTitle?: string;
+  pointType?: string;
+  applicable?: boolean | number;
 };
 
 type ImportBody = {
@@ -23,6 +27,21 @@ type ImportBody = {
 
 function clean(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function pointType(value: unknown) {
+  const candidate = clean(value);
+  return ['control', 'visit', 'document', 'administration', 'not_applicable'].includes(candidate)
+    ? candidate
+    : 'control';
+}
+
+async function addColumnIfMissing(db: D1Database, sql: string) {
+  try { await db.prepare(sql).run(); }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.toLowerCase().includes('duplicate column')) throw error;
+  }
 }
 
 async function ensureControlPlanSchema(db: D1Database) {
@@ -49,6 +68,10 @@ async function ensureControlPlanSchema(db: D1Database) {
       control_method TEXT NOT NULL DEFAULT '',
       responsible_role TEXT NOT NULL DEFAULT '',
       evidence_required TEXT NOT NULL DEFAULT '',
+      category_code TEXT NOT NULL DEFAULT '',
+      category_title TEXT NOT NULL DEFAULT '',
+      point_type TEXT NOT NULL DEFAULT 'control',
+      applicable INTEGER NOT NULL DEFAULT 1,
       result TEXT NOT NULL DEFAULT '',
       completed INTEGER NOT NULL DEFAULT 0,
       completed_at TEXT,
@@ -56,6 +79,10 @@ async function ensureControlPlanSchema(db: D1Database) {
       FOREIGN KEY(control_plan_id) REFERENCES control_plan_documents(id) ON DELETE CASCADE
     )
   `).run();
+  await addColumnIfMissing(db, "ALTER TABLE control_plan_points ADD COLUMN category_code TEXT NOT NULL DEFAULT ''");
+  await addColumnIfMissing(db, "ALTER TABLE control_plan_points ADD COLUMN category_title TEXT NOT NULL DEFAULT ''");
+  await addColumnIfMissing(db, "ALTER TABLE control_plan_points ADD COLUMN point_type TEXT NOT NULL DEFAULT 'control'");
+  await addColumnIfMissing(db, 'ALTER TABLE control_plan_points ADD COLUMN applicable INTEGER NOT NULL DEFAULT 1');
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_control_plan_documents_project ON control_plan_documents(project_id)').run();
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_control_plan_points_document ON control_plan_points(control_plan_id,sort_order)').run();
 }
@@ -114,14 +141,17 @@ export function registerControlPlanRoutes(app: RouteApp) {
       const point = points[index];
       const description = clean(point.description);
       if (!description) continue;
+      const applicable = point.applicable === false || point.applicable === 0 ? 0 : 1;
       await c.env.DB.prepare(`
         INSERT INTO control_plan_points
-          (id,control_plan_id,code,description,control_method,responsible_role,evidence_required,sort_order)
-        VALUES(?,?,?,?,?,?,?,?)
+          (id,control_plan_id,code,description,control_method,responsible_role,evidence_required,
+           category_code,category_title,point_type,applicable,sort_order)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
       `).bind(
         crypto.randomUUID(), controlPlanId, clean(point.code) || `KP-${index + 1}`,
-        description, clean(point.method), clean(point.responsibleRole),
-        clean(point.evidenceRequired), (index + 1) * 10
+        description, clean(point.method), clean(point.responsibleRole), clean(point.evidenceRequired),
+        clean(point.categoryCode), clean(point.categoryTitle), pointType(point.pointType), applicable,
+        (index + 1) * 10
       ).run();
       created += 1;
     }
