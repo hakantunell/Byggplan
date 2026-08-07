@@ -1,0 +1,88 @@
+{
+  "id": "obligatoriska-kontrollpunkter-fritidshus-v1",
+  "name": "Obligatoriska kontrollpunkter – fritidshus",
+  "version": 1,
+  "purpose": "Kompletterar Masterprojekt Fritidshus med generellt återkommande kontroll- och dokumentationsaktiviteter som behöver ske vid rätt tidpunkt i byggflödet. Projektets faktiska styrdokument avgör vilka aktiviteter som aktiveras.",
+  "insertions": [
+    {
+      "target": "10.10/Starta byggarbetsplatsen",
+      "activities": [
+        {"after":"Kontrollera gällande ritningar och handlingar","title":"Registrera BAS-P där det krävs","type":"document"},
+        {"after":"Registrera BAS-P där det krävs","title":"Registrera BAS-U innan utförandeskedet där det krävs","type":"document"},
+        {"after":"Registrera BAS-U innan utförandeskedet där det krävs","title":"Genomför startmöte med byggherre och KA där kontrollplanen kräver det","type":"approval"},
+        {"after":"Genomför startmöte med byggherre och KA där kontrollplanen kräver det","title":"Spara protokoll från startmöte","type":"document"}
+      ]
+    },
+    {
+      "target": "20.10/Förbered markarbete",
+      "activities": [
+        {"after":"Märk ut byggnad och kritiska nivåer","title":"Genomför föreskriven lägeskontroll","type":"measurement"},
+        {"after":"Genomför föreskriven lägeskontroll","title":"Spara mätintyg eller underlag från lägeskontroll","type":"document"}
+      ]
+    },
+    {
+      "target": "20.40/Bygg grundkonstruktion",
+      "activities": [
+        {"before":"Utför gjutning eller montage av grundkonstruktion","title":"Genomför KA-kontroll vid grundbotten före gjutning där kontrollplanen kräver det","type":"approval"},
+        {"before":"Utför gjutning eller montage av grundkonstruktion","title":"Frigör grund för gjutning efter obligatoriska kontroller","type":"approval"}
+      ]
+    },
+    {
+      "target": "30/Bärande stomme",
+      "activities": [
+        {"position":"after_stomme_rest","title":"Genomför KA-kontroll när bärande stomme är rest där kontrollplanen kräver det","type":"approval"},
+        {"position":"after_stomme_rest","title":"Spara dokumentation från KA-kontroll av stomme","type":"document"}
+      ]
+    },
+    {
+      "target": "60.20/Förbered elinstallation",
+      "activities": [
+        {"position":"first","title":"Kontrollera att anlitat elinstallationsföretag är registrerat för aktuellt arbete","type":"check"},
+        {"after":"Kontrollera att anlitat elinstallationsföretag är registrerat för aktuellt arbete","title":"Spara uppgift om elinstallationsföretag","type":"document"}
+      ]
+    },
+    {
+      "target": "60.50/Samordning före igenbyggnad",
+      "activities": [
+        {"position":"before_first_release","title":"Genomför byggnadsnämndens arbetsplatsbesök innan konstruktioner byggs igen där det krävs","type":"approval"},
+        {"position":"before_first_release","title":"Hantera eventuella åtgärder från arbetsplatsbesöket","type":"perform"}
+      ]
+    },
+    {
+      "target": "70/Invändiga konstruktioner",
+      "activities": [
+        {"position":"before_major_closure","title":"Genomför KA-kontroll under invändiga arbeten innan kritiska delar byggs igen där det krävs","type":"approval"},
+        {"position":"before_major_closure","title":"Hantera eventuella åtgärder från KA-kontrollen","type":"perform"}
+      ]
+    },
+    {
+      "target": "80.10/Kontrollera våtrumsförutsättningar",
+      "activities": [
+        {"position":"first","title":"Kontrollera behörighet eller dokumenterad utförandemetod för våtrumsarbetet","type":"check"}
+      ]
+    },
+    {
+      "target": "100.20/Färdigställ utvändigt VA",
+      "activities": [
+        {"before":"Återfyll ledningsschakt","title":"Genomför föreskriven VA-inspektion före övertäckning","type":"approval"},
+        {"before":"Återfyll ledningsschakt","title":"Frigör utvändigt VA för återfyllnad","type":"approval"}
+      ]
+    },
+    {
+      "target": "110.10/Prova och driftsätt installationer",
+      "activities": [
+        {"after":"Genomför elinstallationens föreskrivna kontroller och dokumentation","title":"Registrera resultat från isolationsprovning där det krävs","type":"document"},
+        {"after":"Registrera resultat från isolationsprovning där det krävs","title":"Registrera kontroll av jordfelsbrytare där det krävs","type":"document"}
+      ]
+    },
+    {
+      "target": "120.10/Samla slutdokumentation",
+      "activities": [
+        {"position":"before_finish","title":"Kontrollera färdig byggnad mot beviljat bygglov","type":"check"},
+        {"position":"before_finish","title":"Upprätta eller samla byggherreintyg om överensstämmelse","type":"document"},
+        {"position":"before_finish","title":"Samla slutlig brandskyddsdokumentation där det krävs","type":"document"},
+        {"position":"before_finish","title":"Upprätta eller samla relationshandlingar för dagvatten och utvändigt VA","type":"document"}
+      ]
+    }
+  ]
+}
