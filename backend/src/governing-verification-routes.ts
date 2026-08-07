@@ -27,12 +27,14 @@ async function ensureVerificationSchema(db: D1Database) {
       required INTEGER NOT NULL DEFAULT 1,
       status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','verified','rejected')),
       comment TEXT NOT NULL DEFAULT '',
+      verified_by TEXT,
       verified_at TEXT,
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE(governing_item_id,role_code),
       FOREIGN KEY(governing_item_id) REFERENCES governing_items(id) ON DELETE CASCADE
     )
   `).run();
+  await addColumnIfMissing(db, 'ALTER TABLE governing_item_verifications ADD COLUMN verified_by TEXT');
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_governing_verifications_item ON governing_item_verifications(governing_item_id)').run();
 
   await enrichVk4410ControlPlan(db);
@@ -114,40 +116,129 @@ async function syncVerificationSteps(db: D1Database) {
   }
 }
 
-async function refreshHandlingStatus(db: D1Database, itemId: string) {
-  const item = await db.prepare('SELECT handling_status FROM governing_items WHERE id=?').bind(itemId).first<{ handling_status: string }>();
-  if (!item) return;
-  if (['not_applicable','cannot_verify','alternative_evidence'].includes(item.handling_status)) return;
-  const summary = await db.prepare(`
+async function syncBuilderVerification(db: D1Database, itemId: string) {
+  const builder = await db.prepare(`
+    SELECT id,status FROM governing_item_verifications
+     WHERE governing_item_id=? AND role_code='builder' AND required=1
+  `).bind(itemId).first<any>();
+  if (!builder) return;
+
+  const linked = await db.prepare(`
+    SELECT a.id,COALESCE(e.done,0) AS done,e.completed_by,e.completed_at,e.updated_at
+      FROM governing_item_activity_links l
+      JOIN activities a ON a.id=l.activity_id
+      LEFT JOIN activity_entries e ON e.activity_id=a.id
+     WHERE l.governing_item_id=?
+  `).bind(itemId).all();
+  const rows = linked.results as any[];
+  if (!rows.length) {
+    await db.prepare(`
+      UPDATE governing_item_verifications
+         SET status='pending',verified_by=NULL,verified_at=NULL,comment='',updated_at=datetime('now')
+       WHERE id=?
+    `).bind(builder.id).run();
+    return;
+  }
+
+  const allDone = rows.every(row => Number(row.done) === 1);
+  if (!allDone) {
+    await db.prepare(`
+      UPDATE governing_item_verifications
+         SET status='pending',verified_by=NULL,verified_at=NULL,comment='',updated_at=datetime('now')
+       WHERE id=?
+    `).bind(builder.id).run();
+    return;
+  }
+
+  const completed = rows.filter(row => row.completed_at).sort((a,b) => String(a.completed_at).localeCompare(String(b.completed_at)));
+  const last = completed[completed.length - 1];
+  await db.prepare(`
+    UPDATE governing_item_verifications
+       SET status='verified',verified_by=?,verified_at=?,comment='Egenkontroll via färdigställda aktiviteter',updated_at=datetime('now')
+     WHERE id=?
+  `).bind(last?.completed_by || null,last?.completed_at || null,builder.id).run();
+}
+
+async function derivedStatus(db: D1Database, itemId: string) {
+  const item = await db.prepare('SELECT handling_status FROM governing_items WHERE id=?').bind(itemId).first<any>();
+  if (!item) return 'waiting_activity';
+  if (['not_applicable','cannot_verify','alternative_evidence'].includes(item.handling_status)) return item.handling_status;
+
+  const activitySummary = await db.prepare(`
+    SELECT COUNT(*) AS total,
+           SUM(CASE WHEN COALESCE(e.done,0)=1 THEN 1 ELSE 0 END) AS done,
+           SUM(CASE WHEN e.activity_id IS NOT NULL THEN 1 ELSE 0 END) AS started
+      FROM governing_item_activity_links l
+      JOIN activities a ON a.id=l.activity_id
+      LEFT JOIN activity_entries e ON e.activity_id=a.id
+     WHERE l.governing_item_id=?
+  `).bind(itemId).first<any>();
+  const total = Number(activitySummary?.total || 0);
+  const done = Number(activitySummary?.done || 0);
+  const started = Number(activitySummary?.started || 0);
+  if (!total) return 'waiting_activity';
+  if (done < total) return started > 0 ? 'in_progress' : 'waiting_activity';
+
+  const verificationSummary = await db.prepare(`
     SELECT COUNT(*) AS total,
            SUM(CASE WHEN status='verified' THEN 1 ELSE 0 END) AS verified,
+           SUM(CASE WHEN role_code='ka' AND status<>'verified' THEN 1 ELSE 0 END) AS ka_pending,
            SUM(CASE WHEN status='rejected' THEN 1 ELSE 0 END) AS rejected
       FROM governing_item_verifications
      WHERE governing_item_id=? AND required=1
   `).bind(itemId).first<any>();
-  const total = Number(summary?.total || 0);
-  const verified = Number(summary?.verified || 0);
-  const rejected = Number(summary?.rejected || 0);
-  const status = total > 0 && verified === total ? 'handled' : (verified > 0 || rejected > 0 ? 'in_progress' : 'unhandled');
-  await db.prepare("UPDATE governing_items SET handling_status=?,updated_at=datetime('now') WHERE id=?").bind(status,itemId).run();
+  if (Number(verificationSummary?.rejected || 0) > 0) return 'rejected';
+  if (Number(verificationSummary?.ka_pending || 0) > 0) return 'waiting_ka';
+  const verificationTotal = Number(verificationSummary?.total || 0);
+  const verified = Number(verificationSummary?.verified || 0);
+  return verificationTotal === 0 || verified === verificationTotal ? 'verified' : 'ready_for_verification';
 }
 
 export function registerGoverningVerificationRoutes(app: RouteApp) {
   app.get('/api/studio/governing-documents/:id/verification-map', async c => {
     await ensureVerificationSchema(c.env.DB);
     const documentId = c.req.param('id');
+    const itemRows = await c.env.DB.prepare(`SELECT id FROM governing_items WHERE governing_document_id=?`).bind(documentId).all();
+    for (const item of itemRows.results as any[]) await syncBuilderVerification(c.env.DB,String(item.id));
+
     const rows = await c.env.DB.prepare(`
-      SELECT v.id,v.governing_item_id,v.role_code,v.required,v.status,v.comment,v.verified_at,
-             i.source_basis,i.source_note
+      SELECT v.id,v.governing_item_id,v.role_code,v.required,v.status,v.comment,v.verified_by,v.verified_at,
+             u.display_name AS verified_by_name,i.source_basis,i.source_note
         FROM governing_item_verifications v
         JOIN governing_items i ON i.id=v.governing_item_id
+        LEFT JOIN users u ON u.id=v.verified_by
        WHERE i.governing_document_id=?
        ORDER BY i.sort_order,CASE v.role_code WHEN 'builder' THEN 0 WHEN 'ka' THEN 1 ELSE 2 END
     `).bind(documentId).all();
     const source = await c.env.DB.prepare(`
       SELECT id,source_basis,source_note FROM governing_items WHERE governing_document_id=?
     `).bind(documentId).all();
-    return c.json({ ok: true, verifications: rows.results, source: source.results });
+    const status: Record<string,string> = {};
+    for (const item of itemRows.results as any[]) status[String(item.id)] = await derivedStatus(c.env.DB,String(item.id));
+    return c.json({ ok: true, verifications: rows.results, source: source.results, status });
+  });
+
+  app.get('/api/studio/governing-items/:id/history', async c => {
+    await ensureVerificationSchema(c.env.DB);
+    const itemId = c.req.param('id');
+    await syncBuilderVerification(c.env.DB,itemId);
+    const activities = await c.env.DB.prepare(`
+      SELECT a.id,a.title,e.done,e.completed_at,e.updated_at,u.display_name AS completed_by_name
+        FROM governing_item_activity_links l
+        JOIN activities a ON a.id=l.activity_id
+        LEFT JOIN activity_entries e ON e.activity_id=a.id
+        LEFT JOIN users u ON u.id=e.completed_by
+       WHERE l.governing_item_id=?
+       ORDER BY COALESCE(e.completed_at,e.updated_at),a.title
+    `).bind(itemId).all();
+    const verifications = await c.env.DB.prepare(`
+      SELECT v.role_code,v.status,v.comment,v.verified_at,u.display_name AS verified_by_name
+        FROM governing_item_verifications v
+        LEFT JOIN users u ON u.id=v.verified_by
+       WHERE v.governing_item_id=?
+       ORDER BY v.updated_at
+    `).bind(itemId).all();
+    return c.json({ ok: true, activities: activities.results, verifications: verifications.results, status: await derivedStatus(c.env.DB,itemId) });
   });
 
   app.put('/api/studio/governing-items/:id/verifications/:role', async c => {
@@ -155,6 +246,7 @@ export function registerGoverningVerificationRoutes(app: RouteApp) {
     const itemId = c.req.param('id');
     const role = clean(c.req.param('role')).toLowerCase();
     if (!['builder','ka','authority','external'].includes(role)) return c.json({ ok: false, error: 'Ogiltig verifieringsroll.' }, 400);
+    if (role === 'builder') return c.json({ ok: false, error: 'Egenkontrollen styrs av de kopplade aktiviteterna.' }, 409);
     const body = await c.req.json<Record<string, unknown>>();
     const status = ['pending','verified','rejected'].includes(clean(body.status)) ? clean(body.status) : 'pending';
     const existing = await c.env.DB.prepare(`
@@ -163,11 +255,10 @@ export function registerGoverningVerificationRoutes(app: RouteApp) {
     if (!existing) return c.json({ ok: false, error: 'Verifieringssteget hittades inte.' }, 404);
     await c.env.DB.prepare(`
       UPDATE governing_item_verifications
-         SET status=?,comment=?,verified_at=CASE WHEN ?='verified' THEN datetime('now') ELSE NULL END,
-             updated_at=datetime('now')
+         SET status=?,comment=?,verified_by=CASE WHEN ?='verified' THEN COALESCE(verified_by,'ka-manual') ELSE NULL END,
+             verified_at=CASE WHEN ?='verified' THEN datetime('now') ELSE NULL END,updated_at=datetime('now')
        WHERE governing_item_id=? AND role_code=?
-    `).bind(status,clean(body.comment),status,itemId,role).run();
-    await refreshHandlingStatus(c.env.DB,itemId);
-    return c.json({ ok: true });
+    `).bind(status,clean(body.comment),status,status,itemId,role).run();
+    return c.json({ ok: true, status: await derivedStatus(c.env.DB,itemId) });
   });
 }
