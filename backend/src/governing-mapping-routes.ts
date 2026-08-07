@@ -2,6 +2,8 @@ type RouteApp = {
   get: (path: string, handler: (c: any) => unknown) => void;
 };
 
+const EXCEPTION_STATUSES = ['not_applicable','cannot_verify','alternative_evidence'];
+
 async function addColumnIfMissing(db: D1Database, sql: string) {
   try { await db.prepare(sql).run(); }
   catch (error) {
@@ -11,6 +13,7 @@ async function addColumnIfMissing(db: D1Database, sql: string) {
 }
 
 async function ensureMappingSchema(db: D1Database) {
+  await addColumnIfMissing(db, "ALTER TABLE governing_items ADD COLUMN source_note TEXT NOT NULL DEFAULT ''");
   await addColumnIfMissing(db, "ALTER TABLE governing_item_activity_links ADD COLUMN mapping_source TEXT NOT NULL DEFAULT 'manual'");
   await addColumnIfMissing(db, 'ALTER TABLE governing_item_activity_links ADD COLUMN confidence INTEGER');
   await addColumnIfMissing(db, "ALTER TABLE governing_item_activity_links ADD COLUMN mapping_comment TEXT NOT NULL DEFAULT ''");
@@ -52,9 +55,10 @@ export function registerGoverningMappingRoutes(app: RouteApp) {
              SUM(CASE WHEN EXISTS(
                SELECT 1 FROM governing_item_activity_links l WHERE l.governing_item_id=i.id
              ) THEN 1 ELSE 0 END) AS mapped_count,
+             SUM(CASE WHEN i.handling_status IN ('not_applicable','cannot_verify','alternative_evidence') THEN 1 ELSE 0 END) AS exception_count,
              SUM(CASE WHEN NOT EXISTS(
                SELECT 1 FROM governing_item_activity_links l WHERE l.governing_item_id=i.id
-             ) THEN 1 ELSE 0 END) AS unmapped_count
+             ) AND i.handling_status NOT IN ('not_applicable','cannot_verify','alternative_evidence') THEN 1 ELSE 0 END) AS uncovered_count
         FROM governing_documents d
         LEFT JOIN governing_items i ON i.governing_document_id=d.id
        WHERE d.project_id=?
@@ -93,7 +97,7 @@ export function registerGoverningMappingRoutes(app: RouteApp) {
     const activityRows = activities.results as any[];
     const suggestions: Record<string,any[]> = {};
     for (const item of items.results as any[]) {
-      if (Number(item.mapped_activity_count || 0) > 0) continue;
+      if (Number(item.mapped_activity_count || 0) > 0 || EXCEPTION_STATUSES.includes(String(item.handling_status || ''))) continue;
       const ranked = activityRows
         .map(activity => ({ activity, confidence: similarity(item,activity) }))
         .filter(candidate => candidate.confidence >= 25)
@@ -110,19 +114,36 @@ export function registerGoverningMappingRoutes(app: RouteApp) {
       if (ranked.length) suggestions[String(item.id)] = ranked;
     }
 
-    const documentRows = (documents.results as any[]).map(row => ({
-      ...row,
-      item_count: Number(row.item_count || 0),
-      mapped_count: Number(row.mapped_count || 0),
-      unmapped_count: Number(row.unmapped_count || 0),
-      coverage_percent: Number(row.item_count || 0) ? Math.round(Number(row.mapped_count || 0) * 100 / Number(row.item_count || 0)) : 100
-    }));
+    const documentRows = (documents.results as any[]).map(row => {
+      const itemCount = Number(row.item_count || 0);
+      const mappedCount = Number(row.mapped_count || 0);
+      const exceptionCount = Number(row.exception_count || 0);
+      const coveredCount = Math.min(itemCount,mappedCount + exceptionCount);
+      return {
+        ...row,
+        item_count: itemCount,
+        mapped_count: mappedCount,
+        exception_count: exceptionCount,
+        covered_count: coveredCount,
+        uncovered_count: Number(row.uncovered_count || 0),
+        coverage_percent: itemCount ? Math.round(coveredCount * 100 / itemCount) : 100
+      };
+    });
     const total = documentRows.reduce((sum,row) => sum + row.item_count,0);
     const mapped = documentRows.reduce((sum,row) => sum + row.mapped_count,0);
+    const exceptions = documentRows.reduce((sum,row) => sum + row.exception_count,0);
+    const covered = documentRows.reduce((sum,row) => sum + row.covered_count,0);
 
     return c.json({
       ok: true,
-      summary: { item_count: total, mapped_count: mapped, unmapped_count: total-mapped, coverage_percent: total ? Math.round(mapped*100/total) : 100 },
+      summary: {
+        item_count: total,
+        mapped_count: mapped,
+        exception_count: exceptions,
+        covered_count: covered,
+        uncovered_count: Math.max(0,total-covered),
+        coverage_percent: total ? Math.round(covered*100/total) : 100
+      },
       documents: documentRows,
       items: items.results,
       activities: activityRows,
