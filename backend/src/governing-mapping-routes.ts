@@ -1,5 +1,6 @@
 type RouteApp = {
   get: (path: string, handler: (c: any) => unknown) => void;
+  put: (path: string, handler: (c: any) => unknown) => void;
 };
 
 const EXCEPTION_STATUSES = ['not_applicable','cannot_verify','alternative_evidence'];
@@ -149,5 +150,40 @@ export function registerGoverningMappingRoutes(app: RouteApp) {
       activities: activityRows,
       suggestions
     });
+  });
+
+  app.put('/api/studio/governing-items/:itemId/mappings/:activityId', async c => {
+    await ensureMappingSchema(c.env.DB);
+    const itemId = c.req.param('itemId');
+    const activityId = c.req.param('activityId');
+    const body = await c.req.json<Record<string,unknown>>().catch(() => ({}));
+    const pair = await c.env.DB.prepare(`
+      SELECT i.id AS item_id,a.id AS activity_id
+        FROM governing_items i
+        JOIN governing_documents d ON d.id=i.governing_document_id
+        JOIN activities a
+        JOIN tasks t ON t.id=a.task_id
+        JOIN work_sections ws ON ws.id=t.work_section_id
+        JOIN work_areas wa ON wa.id=ws.work_area_id
+       WHERE i.id=? AND a.id=? AND d.project_id=wa.project_id
+    `).bind(itemId,activityId).first();
+    if (!pair) return c.json({ ok: false, error: 'Posten och aktiviteten tillhör inte samma projekt.' }, 409);
+
+    const rawConfidence = Number(body.confidence);
+    const confidence = Number.isFinite(rawConfidence) ? Math.max(0,Math.min(100,Math.round(rawConfidence))) : null;
+    const source = String(body.mappingSource || 'manual') === 'suggested' ? 'suggested' : 'manual';
+    const comment = typeof body.comment === 'string' ? body.comment.trim() : '';
+
+    await c.env.DB.prepare(`
+      INSERT INTO governing_item_activity_links
+        (id,governing_item_id,activity_id,link_type,mapping_source,confidence,mapping_comment,created_at,confirmed_at)
+      VALUES(?,?,?,'supports',?,?,?,datetime('now'),datetime('now'))
+      ON CONFLICT(governing_item_id,activity_id) DO UPDATE SET
+        mapping_source=excluded.mapping_source,
+        confidence=excluded.confidence,
+        mapping_comment=excluded.mapping_comment,
+        confirmed_at=datetime('now')
+    `).bind(crypto.randomUUID(),itemId,activityId,source,confidence,comment).run();
+    return c.json({ ok: true });
   });
 }
