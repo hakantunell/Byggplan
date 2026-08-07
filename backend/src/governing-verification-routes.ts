@@ -116,6 +116,20 @@ async function syncVerificationSteps(db: D1Database) {
   }
 }
 
+async function activitiesReadyForVerification(db: D1Database, itemId: string) {
+  const summary = await db.prepare(`
+    SELECT COUNT(*) AS total,
+           SUM(CASE WHEN COALESCE(e.done,0)=1 THEN 1 ELSE 0 END) AS done
+      FROM governing_item_activity_links l
+      JOIN activities a ON a.id=l.activity_id
+      LEFT JOIN activity_entries e ON e.activity_id=a.id
+     WHERE l.governing_item_id=?
+  `).bind(itemId).first<any>();
+  const total = Number(summary?.total || 0);
+  const done = Number(summary?.done || 0);
+  return total > 0 && done === total;
+}
+
 async function syncBuilderVerification(db: D1Database, itemId: string) {
   const builder = await db.prepare(`
     SELECT id,status FROM governing_item_verifications
@@ -253,6 +267,11 @@ export function registerGoverningVerificationRoutes(app: RouteApp) {
       SELECT id FROM governing_item_verifications WHERE governing_item_id=? AND role_code=?
     `).bind(itemId,role).first();
     if (!existing) return c.json({ ok: false, error: 'Verifieringssteget hittades inte.' }, 404);
+
+    if (status === 'verified' && !(await activitiesReadyForVerification(c.env.DB,itemId))) {
+      return c.json({ ok: false, error: 'Verifiering kan inte göras innan alla kopplade aktiviteter är klara.' }, 409);
+    }
+
     await c.env.DB.prepare(`
       UPDATE governing_item_verifications
          SET status=?,comment=?,verified_by=CASE WHEN ?='verified' THEN COALESCE(verified_by,'ka-manual') ELSE NULL END,
