@@ -1,78 +1,81 @@
-# Initial mappning – Vemdalens Kyrkby 44:10
+# Mappning – Vemdalens Kyrkby 44:10
 
-Syfte: stresstesta `master-projects/fritidshus-v1.json` mot verkliga styrdokument och hitta luckor innan projektstrukturen betraktas som färdig.
+Syfte: stresstesta Masterprojekt Fritidshus mot verkliga styrdokument och säkerställa att obligatoriska kontrollpunkter får en konkret plats i byggflödet.
 
-Status:
-- `MAPPAD` – befintlig aktivitet täcker posten på rimlig nivå.
-- `KOMPLETTERA` – befintligt moment finns men behöver tydligare aktivitet eller dokumentationskrav.
-- `NY AKTIVITET` – arbetssteget saknas i Masterprojektet.
-- `UNDANTAG/ADMIN` – bör hanteras som styrande undantag, dokument/intyg eller projektadministration snarare än vanligt byggarbete.
+## Status efter komplettering
+
+Följande filer utgör nu underlaget:
+
+- `master-projects/fritidshus-v1.json` – generell byggprocess.
+- `master-projects/modules/obligatoriska-kontrollpunkter-fritidshus-v1.json` – kontrollpunkter som aktiveras när projektets styrdokument kräver dem.
+- `master-projects/modules/enskilt-avlopp-v1.json` – funktionsmodul för enskilt avlopp.
+
+Principen är att styrande krav inte skapar ett parallellt administrativt flöde. De placeras som aktiviteter exakt där kontrollen, fotot, intyget eller frigivningen måste ske i byggordningen.
 
 ## Kontrollplan enligt PBL för KA
 
-| Kontrollpunkt | Status | Föreslagen placering / åtgärd |
+| Kontrollpunkt | Status | Placering |
 |---|---|---|
-| Utstakning av byggnaden | MAPPAD | 10.10 Starta byggarbetsplatsen → Kontrollera utsättning och referenshöjd |
-| Kontrollmätning/lägeskontroll av byggnadens placering | NY AKTIVITET | 20.10 Förbered markarbete → Lägeskontroll efter utsättning/grundläggning, dokumenteras med mätintyg |
-| KA-besök vid grundbotten inför gjutning | NY AKTIVITET | 20.20/20.40 → Boka/genomför KA-kontroll innan grund gjuts |
-| KA-besök när stommen är rest | NY AKTIVITET | 30 Bärande stomme → Boka/genomför KA-kontroll när stomme är rest |
-| KA-besök under pågående invändiga arbeten | NY AKTIVITET | 70 Invändiga konstruktioner → Boka/genomför KA-kontroll innan för mycket byggs igen |
-| Byggnadsnämndens arbetsplatsbesök vid tätt hus innan allt är igenbyggt | NY AKTIVITET | 60.50 Samordning före igenbyggnad → Säkerställ arbetsplatsbesök innan igenbyggnad |
-| Besök vid slutsamråd | MAPPAD | 120.20 Förbered och avsluta slutbesked |
-| Överensstämmelse med bygglov | KOMPLETTERA | 120.10 → Lägg tydlig aktivitet: Kontrollera färdig byggnad mot bygglov och upprätta byggherreintyg |
-| Arbetsmiljöplan upprättad | MAPPAD | 10.10 Starta byggarbetsplatsen |
-| BAS-P utsedd | NY AKTIVITET | 10.10 → Registrera BAS-P |
-| BAS-U utsedd | NY AKTIVITET | 10.10 → Registrera BAS-U innan utförandeskedet |
-| Startmöte med BH + KA | NY AKTIVITET | 10.10 → Genomför startmöte och spara protokoll |
-| Geoteknisk utredning utförd | UNDANTAG/ADMIN | Projekteringsunderlag. ByggPlan startar vid startbesked; dokumentet ska finnas som styrande underlag, inte utföras som byggaktivitet. |
-| Radonklass enligt kommunens uppgifter | UNDANTAG/ADMIN | Projekteringsunderlag/styrande dokument. |
-| Geotekniskt utlåtande beaktat i projekteringen | UNDANTAG/ADMIN | Projekteringskontroll före ByggPlans utförandeskede. |
-| TE/byggherres egenkontroll bärförmåga/stadga | KOMPLETTERA | Mappas mot kontroller och foton i 20 Grund, 30 Stomme och 40 Tak. Kontrollplanens post kräver flera aktiviteter. |
-| Intyg sotare – rökkanaler/taksäkerhet | MAPPAD | 60.40 Installera eldstad och rökkanal → besiktning + protokoll |
-| Brandskyddsbeskrivning upprättad | UNDANTAG/ADMIN | Projekterings-/styrdokument. |
-| Brandskyddsdokumentation slutlig | KOMPLETTERA | 120.10 Samla slutdokumentation → lägg explicit aktivitet för slutlig brandskyddsdokumentation när eldstad/brandkrav finns |
-| Brandskyddsbeskrivning beaktad i projekteringen | UNDANTAG/ADMIN | Projekteringskontroll. |
-| Installationer för dagvatten | MAPPAD | 100.10 Färdigställ dagvatten och mark |
-| Behörighetskontroll Byggkeramikrådet eller redovisning av utförd metod | KOMPLETTERA | 80.10/80.30 → explicit dokument/intyg eller redovisning av metod per våtrum |
-| Fuktsäkerhetsprojektering beaktad | UNDANTAG/ADMIN | Projekteringsunderlag; byggaktiviteter verifierar utförandet men inte själva projekteringen. |
-| Provtryckningsprotokoll VA | MAPPAD | 60.10 Montera spillvatten och vatten + 110.10 Registrera protokoll och intyg |
-| Elinstallationsföretaget registrerat hos Elsäkerhetsverket | NY AKTIVITET | 60.20 El → kontrollera/registrera behörigt elinstallationsföretag före elarbete |
-| Isolationsprovning utförd | KOMPLETTERA | 110.10 → explicit aktivitet och bevis från elentreprenör |
-| Jordfelsbrytare | KOMPLETTERA | 110.10 → explicit funktionskontroll/dokumentation från elentreprenör |
-| Lämplighet för avsett ändamål / arkitektens egenkontroll | UNDANTAG/ADMIN | Projekterings-/slutdokument; inte ett normalt arbetskort. |
-| Tillgänglighet/användbarhet / arkitektens egenkontroll | UNDANTAG/ADMIN | Projekterings-/slutdokument. |
-| VA-inspektion före övertäckning | KOMPLETTERA | 100.20 Färdigställ utvändigt VA → explicit inspektions-/frigivningsaktivitet innan återfyllnad |
-| Relationshandlingar LOD + VA utvändigt | NY AKTIVITET | 120.10 → upprätta/samla relationshandlingar för dagvatten och utvändigt VA |
-| Förberedelse för bredbandsanslutning | NY AKTIVITET | 60 Installationer eller 100 Utvändigt → generisk valbar aktivitet/modul |
-| Laddning av elfordon – ej aktuell | UNDANTAG/ADMIN | Styrande post markeras Ej tillämplig (N/A). |
+| Utstakning av byggnaden | TÄCKT | 10.10 Starta byggarbetsplatsen |
+| Lägeskontroll / kontrollmätning | TÄCKT | Compliance-modul → 20.10 Förbered markarbete |
+| KA-besök vid grundbotten före gjutning | TÄCKT | Compliance-modul → 20.40 före gjutning |
+| KA-besök när stommen är rest | TÄCKT | Compliance-modul → 30 Bärande stomme |
+| KA-besök under invändiga arbeten | TÄCKT | Compliance-modul → 70 Invändiga konstruktioner |
+| Byggnadsnämndens arbetsplatsbesök innan igenbyggnad | TÄCKT | Compliance-modul → 60.50 Samordning före igenbyggnad |
+| Slutsamråd | TÄCKT | 120.20 Slutbesked |
+| Kontroll mot bygglov / byggherreintyg | TÄCKT | Compliance-modul → 120.10 Slutdokumentation |
+| Arbetsmiljöplan | TÄCKT | 10.10 Startförutsättningar |
+| BAS-P | TÄCKT | Compliance-modul → 10.10 |
+| BAS-U | TÄCKT | Compliance-modul → 10.10 |
+| Startmöte BH + KA | TÄCKT | Compliance-modul → 10.10 |
+| Geoteknisk utredning | ADMIN/STYRDOKUMENT | Ska finnas som styrande underlag; utförs normalt före ByggPlans scope. |
+| Radonklass | ADMIN/STYRDOKUMENT | Projekteringsunderlag. |
+| Bärförmåga och stadga | TÄCKT VIA FLERA AKTIVITETER | Grund, stomme och tak innehåller kontroller och dokumentation. |
+| Intyg sotare / rökkanal / taksäkerhet | TÄCKT | 60.40 Eldstad och rökkanal |
+| Brandskyddsbeskrivning | ADMIN/STYRDOKUMENT | Projekteringsunderlag. |
+| Slutlig brandskyddsdokumentation | TÄCKT | Compliance-modul → 120.10 |
+| Dagvatteninstallation | TÄCKT | 100.10 Dagvatten och mark |
+| Våtrumsbehörighet eller dokumenterad metod | TÄCKT | Compliance-modul → 80.10 |
+| Fuktsäkerhetsprojektering | ADMIN/STYRDOKUMENT | Projekteringsunderlag; utförandet verifieras i byggprocessen. |
+| Provtryckningsprotokoll VA | TÄCKT | 60.10 + 110.10 |
+| Registrerat elinstallationsföretag | TÄCKT | Compliance-modul → 60.20 före elarbete |
+| Isolationsprovning | TÄCKT | Compliance-modul → 110.10 |
+| Jordfelsbrytare | TÄCKT | Compliance-modul → 110.10 |
+| Arkitektens egenkontroll / ändamålsenlighet | ADMIN/STYRDOKUMENT | Projekterings-/slutdokument. |
+| Tillgänglighet och användbarhet | ADMIN/STYRDOKUMENT | Projekterings-/slutdokument. |
+| VA-inspektion före övertäckning | TÄCKT | Compliance-modul → 100.20 före återfyllnad |
+| Relationshandling LOD + VA | TÄCKT | Compliance-modul → 120.10 |
+| Förberedelse bredband | PROJEKTSPECIFIK | Läggs som valbar aktivitet/modul när projektet kräver det. |
+| Laddning av elfordon – ej aktuell | UNDANTAG | Markeras Ej tillämplig (N/A). |
 
 ## Miljöbeslut – enskilt avlopp
 
-Detta ska inte bakas in som obligatoriskt i alla fritidshus. Det bör ligga som projekt-/funktionsmodul `Enskilt avlopp`, men aktiviteterna ska följa samma vanliga projektstruktur.
+Samtliga identifierade utförande- och dokumentationskrav har nu en konkret aktivitet i `enskilt-avlopp-v1.json`.
 
-| Villkor / dokumentationskrav | Status | Föreslagen aktivitet |
+| Villkor / dokumentationskrav | Status | Placering |
 |---|---|---|
-| Utför enligt ansökan, kompletteringar och tillverkarens anvisningar | KOMPLETTERA | Kontrollera beslut, situationsplan och monteringsanvisning innan start |
-| Installation utförs av dokumenterat sakkunnig person | NY AKTIVITET | Registrera sakkunnig/entreprenör före installation |
-| Anläggningen tät fram till infiltration | KOMPLETTERA | Täthetskontroll före återfyllnad |
-| Dag-/drän-/filter-/pool-/stort bad-/garagevatten får inte anslutas | NY AKTIVITET | Kontrollera att förbjudna vattenflöden inte är anslutna |
-| Entreprenörsrapport + fotodokumentation skickas snarast efter färdigställande | NY AKTIVITET | Fyll i entreprenörsrapport; kontrollera foton; skicka slutunderlag till miljö- och byggnämnden |
-| Bild i varje installerad brunn | NY AKTIVITET | Fotografera insida av varje ny brunn före färdigställande |
-| Bild på infiltration/markbädd tom grop | UNDANTAG/PROJEKTSPECIFIK | Befintlig infiltration används i detta projekt. Om ny infiltration byggs ska aktiviteten ingå i infiltrationsmodulen. |
-| Bild på varje lager i infiltration/markbädd | UNDANTAG/PROJEKTSPECIFIK | Samma som ovan. |
-| Bild på ledningar innan de läggs igen | MAPPAD | 100.20 → Fotografera ledningar och anslutningar före återfyllnad |
-| Översiktsbild som visar brunn, infiltration/markbädd och hus | NY AKTIVITET | Ta översiktsbild efter installation före/vid slutrapportering |
-| Slamavskiljare ska vara åtkomlig för slamtömning | NY AKTIVITET | Kontrollera åtkomlighet för slamtömning innan mark färdigställs |
-| Tillstånd och villkor ska sparas och följa fastigheten | MAPPAD/ADMIN | Styrande dokument + slut-/driftunderlag, inte dagligt arbetskort |
+| Följ tillstånd, situationsplan och monteringsanvisningar | TÄCKT | 100.21 Förberedelser |
+| Dokumenterat sakkunnig utförare | TÄCKT | 100.21 Registrera ansvarig entreprenör |
+| Tät anläggning fram till infiltration | TÄCKT | 100.22 Täthetskontroll före återfyllnad |
+| Förbjudna vattenflöden får inte anslutas | TÄCKT | 100.22 Kontroll före återfyllnad |
+| Foto i varje installerad brunn | TÄCKT | 100.22 före återfyllnad |
+| Foto ledningar före igenläggning | TÄCKT | 100.22 före återfyllnad |
+| VA-inspektion före övertäckning | TÄCKT | 100.22 frigivningspunkt |
+| Foto tom grop för infiltration/markbädd | TÄCKT NÄR MODULDELEN ANVÄNDS | 100.23 |
+| Foto varje lager | TÄCKT NÄR MODULDELEN ANVÄNDS | 100.23 |
+| Översiktsbild hus + brunn + infiltration/anslutning | TÄCKT | 100.24 |
+| Slamtömningsåtkomlighet | TÄCKT | 100.21 före installation/färdig mark |
+| Entreprenörsrapport och foton till kommunen | TÄCKT | 100.24 slutrapportering |
+| Tillstånd och slutunderlag sparas med fastigheten | TÄCKT | 100.24 + styrdokumentarkiv |
 
-## Slutsats efter första stresstestet
+## Återstående arbete
 
-Masterprojektets huvudstruktur fungerar. De största luckorna är inte nya arbetsområden utan ett antal tydliga aktiviteter på rätt plats:
+Strukturen har nu aktiviteter för de identifierade kraven. Nästa steg är inte att lägga till fler generella aktiviteter på spekulation, utan att:
 
-1. Myndighets-/KA-kontroller vid rätt tidpunkt.
-2. Explicit frigivning före återfyllnad/igenbyggnad där extern inspektion krävs.
-3. Slut-/relationshandlingar och byggherreintyg.
-4. Behörighets- och provningsbevis för el, VVS och våtrum.
-5. Projektmodul för enskilt avlopp med exakt den fotodokumentation som miljöbeslutet kräver.
+1. Importera Masterprojektets struktur till ett testprojekt.
+2. Aktivera relevanta compliance-aktiviteter och modulen Enskilt avlopp.
+3. Importera kontrollplan och miljöbeslut som styrande dokument.
+4. Mappa varje styrande post mot en eller flera aktiviteter.
+5. Köra Kartläggning/coverage och endast komplettera projektstrukturen där verkliga poster fortfarande är röda eller delvis täckta.
 
-Nästa steg är att föra in dessa luckor i Masterprojektet/modulen och därefter importera strukturen till ett projekt och köra styrdokumentens coverage-vy mot riktiga aktiviteter.
+Målet är 100 % omhändertagna styrande poster utan att göra aktivitetsflödet onödigt tungt.
