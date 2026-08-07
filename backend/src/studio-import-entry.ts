@@ -2,8 +2,9 @@ import app from './studio-routes';
 import { registerControlPlanRoutes } from './control-plan-routes';
 import { registerGoverningDocumentRoutes } from './governing-document-routes';
 import { registerGoverningVerificationRoutes } from './governing-verification-routes';
+import { registerGoverningMappingRoutes } from './governing-mapping-routes';
 
-const IMPORT_RUNTIME_VERSION = '2026-08-07-v10';
+const IMPORT_RUNTIME_VERSION = '2026-08-07-v11';
 
 type ImportClassification = {
   category?: string;
@@ -37,17 +38,9 @@ function clean(value: unknown): string {
 function mapActivityType(value: unknown): string {
   const type = clean(value);
   const mapping: Record<string, string> = {
-    work: 'perform',
-    perform: 'perform',
-    documentation: 'document',
-    document: 'document',
-    measurement: 'measurement',
-    control: 'check',
-    check: 'check',
-    approval: 'approval',
-    wait: 'note',
-    note: 'note',
-    choice: 'choice'
+    work: 'perform', perform: 'perform', documentation: 'document', document: 'document',
+    measurement: 'measurement', control: 'check', check: 'check', approval: 'approval',
+    wait: 'note', note: 'note', choice: 'choice'
   };
   return mapping[type] ?? 'perform';
 }
@@ -72,31 +65,19 @@ async function ensureClassificationSchema(db: D1Database) {
       FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE CASCADE
     )
   `).run();
-  await db.prepare(`
-    CREATE INDEX IF NOT EXISTS idx_activity_classifications_activity
-    ON activity_classifications(activity_id)
-  `).run();
+  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_activity_classifications_activity ON activity_classifications(activity_id)`).run();
 }
 
-async function insertClassifications(
-  db: D1Database,
-  activityId: string,
-  classifications: ImportClassification[] | undefined,
-  defaultSource: string
-) {
+async function insertClassifications(db: D1Database, activityId: string, classifications: ImportClassification[] | undefined, defaultSource: string) {
   for (const classification of classifications ?? []) {
     const category = mapClassificationCategory(classification.category);
     const code = clean(classification.code);
     const label = clean(classification.label);
     if (!category || !code || !label) continue;
     await db.prepare(`
-      INSERT OR IGNORE INTO activity_classifications
-        (id,activity_id,category,code,label,source)
+      INSERT OR IGNORE INTO activity_classifications(id,activity_id,category,code,label,source)
       VALUES(?,?,?,?,?,?)
-    `).bind(
-      crypto.randomUUID(), activityId, category, code, label,
-      clean(classification.source) || defaultSource
-    ).run();
+    `).bind(crypto.randomUUID(),activityId,category,code,label,clean(classification.source) || defaultSource).run();
   }
 }
 
@@ -107,12 +88,7 @@ app.get('/api/studio/activities/:id/classifications', async c => {
   const activityId = c.req.param('id');
   const activity = await c.env.DB.prepare('SELECT id FROM activities WHERE id=?').bind(activityId).first();
   if (!activity) return c.json({ ok: false, error: 'Aktiviteten hittades inte.' }, 404);
-  const result = await c.env.DB.prepare(`
-    SELECT id,activity_id,category,code,label,source
-    FROM activity_classifications
-    WHERE activity_id=?
-    ORDER BY category,label
-  `).bind(activityId).all();
+  const result = await c.env.DB.prepare(`SELECT id,activity_id,category,code,label,source FROM activity_classifications WHERE activity_id=? ORDER BY category,label`).bind(activityId).all();
   return c.json({ ok: true, classifications: result.results });
 });
 
@@ -133,10 +109,7 @@ app.post('/api/studio/import-tree', async c => {
   const targetWorkAreaId = clean(body.targetWorkAreaId);
   const areaName = clean(body.areaName);
   const sections = Array.isArray(body.sections) ? body.sections : [];
-
-  if (!sections.length) {
-    return c.json({ ok: false, error: 'Importen innehåller inga arbetsavsnitt.', version: IMPORT_RUNTIME_VERSION }, 400);
-  }
+  if (!sections.length) return c.json({ ok: false, error: 'Importen innehåller inga arbetsavsnitt.', version: IMPORT_RUNTIME_VERSION }, 400);
 
   let workAreaId = targetWorkAreaId;
   let sectionOrder = 0;
@@ -148,89 +121,50 @@ app.post('/api/studio/import-tree', async c => {
 
   try {
     await ensureClassificationSchema(c.env.DB);
-
     if (workAreaId) {
-      const area = await c.env.DB.prepare(
-        'SELECT id,project_id FROM work_areas WHERE id=?'
-      ).bind(workAreaId).first<{ id: string; project_id: string }>();
-
+      const area = await c.env.DB.prepare('SELECT id,project_id FROM work_areas WHERE id=?').bind(workAreaId).first<{ id: string; project_id: string }>();
       if (!area) return c.json({ ok: false, error: 'Målarbetsområdet hittades inte.', version: IMPORT_RUNTIME_VERSION }, 404);
-      if (projectId && area.project_id !== projectId) {
-        return c.json({ ok: false, error: 'Arbetsområdet tillhör inte valt projekt.', version: IMPORT_RUNTIME_VERSION }, 409);
-      }
-
-      const orderRow = await c.env.DB.prepare(
-        'SELECT COALESCE(MAX(sort_order),0) AS max_order FROM work_sections WHERE work_area_id=?'
-      ).bind(workAreaId).first<{ max_order: number }>();
+      if (projectId && area.project_id !== projectId) return c.json({ ok: false, error: 'Arbetsområdet tillhör inte valt projekt.', version: IMPORT_RUNTIME_VERSION }, 409);
+      const orderRow = await c.env.DB.prepare('SELECT COALESCE(MAX(sort_order),0) AS max_order FROM work_sections WHERE work_area_id=?').bind(workAreaId).first<{ max_order: number }>();
       sectionOrder = Number(orderRow?.max_order ?? 0);
     } else {
-      if (!projectId || !areaName) {
-        return c.json({ ok: false, error: 'Projekt och namn på arbetsområde krävs.', version: IMPORT_RUNTIME_VERSION }, 400);
-      }
-
-      const project = await c.env.DB.prepare('SELECT id FROM projects WHERE id=?')
-        .bind(projectId).first();
+      if (!projectId || !areaName) return c.json({ ok: false, error: 'Projekt och namn på arbetsområde krävs.', version: IMPORT_RUNTIME_VERSION }, 400);
+      const project = await c.env.DB.prepare('SELECT id FROM projects WHERE id=?').bind(projectId).first();
       if (!project) return c.json({ ok: false, error: 'Projektet hittades inte.', version: IMPORT_RUNTIME_VERSION }, 404);
-
-      const orderRow = await c.env.DB.prepare(
-        'SELECT COALESCE(MAX(sort_order),0)+10 AS next_order FROM work_areas WHERE project_id=?'
-      ).bind(projectId).first<{ next_order: number }>();
-
+      const orderRow = await c.env.DB.prepare('SELECT COALESCE(MAX(sort_order),0)+10 AS next_order FROM work_areas WHERE project_id=?').bind(projectId).first<{ next_order: number }>();
       workAreaId = crypto.randomUUID();
-      await c.env.DB.prepare(
-        'INSERT INTO work_areas(id,project_id,name,sort_order) VALUES(?,?,?,?)'
-      ).bind(workAreaId, projectId, areaName, Number(orderRow?.next_order ?? 10)).run();
+      await c.env.DB.prepare('INSERT INTO work_areas(id,project_id,name,sort_order) VALUES(?,?,?,?)').bind(workAreaId,projectId,areaName,Number(orderRow?.next_order ?? 10)).run();
       createdArea = true;
     }
 
     for (const section of sections) {
       const sectionName = clean(section.name);
       if (!sectionName) continue;
-
       sectionOrder += 10;
       const sectionId = crypto.randomUUID();
-      await c.env.DB.prepare(
-        'INSERT INTO work_sections(id,work_area_id,name,sort_order) VALUES(?,?,?,?)'
-      ).bind(sectionId, workAreaId, sectionName, sectionOrder).run();
+      await c.env.DB.prepare('INSERT INTO work_sections(id,work_area_id,name,sort_order) VALUES(?,?,?,?)').bind(sectionId,workAreaId,sectionName,sectionOrder).run();
       sectionCount += 1;
-
       let taskOrder = 0;
       for (const task of section.tasks ?? []) {
         const taskTitle = clean(task.title);
         if (!taskTitle) continue;
-
         taskOrder += 10;
         const taskId = crypto.randomUUID();
-        await c.env.DB.prepare(`
-          INSERT INTO tasks(id,work_section_id,section,title,description,status,sort_order,updated_at)
-          VALUES(?,?,?,?,?,'todo',?,datetime('now'))
-        `).bind(taskId, sectionId, sectionName, taskTitle, clean(task.description), taskOrder).run();
+        await c.env.DB.prepare(`INSERT INTO tasks(id,work_section_id,section,title,description,status,sort_order,updated_at) VALUES(?,?,?,?,?,'todo',?,datetime('now'))`).bind(taskId,sectionId,sectionName,taskTitle,clean(task.description),taskOrder).run();
         taskCount += 1;
-
         let activityOrder = 0;
         for (const activity of task.activities ?? []) {
           const activityTitle = clean(activity.title);
           if (!activityTitle) continue;
-
           activityOrder += 10;
           const activityId = crypto.randomUUID();
-          await c.env.DB.prepare(`
-            INSERT INTO activities
-              (id,task_id,title,description,activity_type,required,blocking,irreversible,sort_order)
-            VALUES(?,?,?,?,?,1,0,0,?)
-          `).bind(
-            activityId, taskId, activityTitle, clean(activity.description),
-            mapActivityType(activity.type), activityOrder
-          ).run();
+          await c.env.DB.prepare(`INSERT INTO activities(id,task_id,title,description,activity_type,required,blocking,irreversible,sort_order) VALUES(?,?,?,?,?,1,0,0,?)`).bind(activityId,taskId,activityTitle,clean(activity.description),mapActivityType(activity.type),activityOrder).run();
           activityCount += 1;
-          await insertClassifications(c.env.DB, activityId, activity.classifications, 'module');
-          classificationCount += (activity.classifications ?? []).filter(item =>
-            mapClassificationCategory(item.category) && clean(item.code) && clean(item.label)
-          ).length;
+          await insertClassifications(c.env.DB,activityId,activity.classifications,'module');
+          classificationCount += (activity.classifications ?? []).filter(item => mapClassificationCategory(item.category) && clean(item.code) && clean(item.label)).length;
         }
       }
     }
-
     if (!sectionCount) {
       if (createdArea) await c.env.DB.prepare('DELETE FROM work_areas WHERE id=?').bind(workAreaId).run();
       return c.json({ ok: false, error: 'Importen innehåller inga giltiga arbetsavsnitt.', version: IMPORT_RUNTIME_VERSION }, 400);
@@ -238,34 +172,15 @@ app.post('/api/studio/import-tree', async c => {
   } catch (error) {
     console.error('Studio tree import failed', error);
     const databaseError = error instanceof Error ? error.message : String(error);
-    return c.json({
-      ok: false,
-      error: `Import v10: ${databaseError}`,
-      progress: {
-        sections: sectionCount,
-        tasks: taskCount,
-        activities: activityCount,
-        classifications: classificationCount
-      },
-      version: IMPORT_RUNTIME_VERSION
-    }, 500);
+    return c.json({ ok: false, error: `Import v11: ${databaseError}`, progress: { sections: sectionCount, tasks: taskCount, activities: activityCount, classifications: classificationCount }, version: IMPORT_RUNTIME_VERSION }, 500);
   }
 
-  return c.json({
-    ok: true,
-    version: IMPORT_RUNTIME_VERSION,
-    workAreaId,
-    created: {
-      sections: sectionCount,
-      tasks: taskCount,
-      activities: activityCount,
-      classifications: classificationCount
-    }
-  }, 201);
+  return c.json({ ok: true, version: IMPORT_RUNTIME_VERSION, workAreaId, created: { sections: sectionCount, tasks: taskCount, activities: activityCount, classifications: classificationCount } }, 201);
 });
 
 registerControlPlanRoutes(app as any);
 registerGoverningDocumentRoutes(app as any);
 registerGoverningVerificationRoutes(app as any);
+registerGoverningMappingRoutes(app as any);
 
 export default app;
