@@ -1,0 +1,87 @@
+{
+  "id": "enskilt-avlopp-v1",
+  "name": "Enskilt avlopp",
+  "version": 1,
+  "targetWorkArea": "100",
+  "scope": "Installation av slamavskiljare, ledningar och eventuell infiltration/markbädd fram till färdig myndighetsrapportering.",
+  "principles": [
+    "Modulen används endast när projektet har enskilt avlopp.",
+    "Dokumentation tas innan ledningar, brunnar eller infiltrationslager inte längre går att verifiera.",
+    "Aktiviteter som inte gäller projektets valda lösning markeras Ej tillämplig i projektet i stället för att skapa onödig administration."
+  ],
+  "sections": [
+    {
+      "number": "100.21",
+      "name": "Enskilt avlopp – förberedelser",
+      "tasks": [
+        {
+          "title": "Förbered avloppsinstallationen",
+          "activities": [
+            {"title":"Kontrollera tillstånd, situationsplan och villkor före start","type":"check"},
+            {"title":"Kontrollera tillverkarens monteringsanvisningar","type":"check"},
+            {"title":"Registrera sakkunnig eller ansvarig entreprenör","type":"document"},
+            {"title":"Kontrollera placering och höjder för brunnar, ledningar och infiltration","type":"check"},
+            {"title":"Kontrollera åtkomlighet för framtida slamtömning","type":"check"}
+          ]
+        }
+      ]
+    },
+    {
+      "number": "100.22",
+      "name": "Enskilt avlopp – ledningar och brunnar",
+      "tasks": [
+        {
+          "title": "Installera ledningar och brunnar",
+          "activities": [
+            {"title":"Schakta för ledningar och brunnar","type":"perform"},
+            {"title":"Förbered ledningsbädd och brunnsbotten","type":"perform"},
+            {"title":"Montera slamavskiljare och övriga brunnar","type":"perform"},
+            {"title":"Montera spillvattenledningar och anslutningar","type":"perform"},
+            {"title":"Kontrollera dimensioner, fall och höjder","type":"measurement"},
+            {"title":"Kontrollera att dag-, drän-, filter-, pool-, garage- och annat otillåtet vatten inte är anslutet","type":"check"},
+            {"title":"Utför täthetskontroll fram till infiltration eller anslutningspunkt","type":"check"},
+            {"title":"Fotografera insidan av varje installerad brunn","type":"document"},
+            {"title":"Fotografera ledningar och anslutningar före återfyllnad","type":"document"},
+            {"title":"Genomför föreskriven VA-inspektion före övertäckning","type":"approval"},
+            {"title":"Frigör ledningsschakt för återfyllnad","type":"approval"},
+            {"title":"Återfyll ledningsschakt och runt brunnar","type":"perform"}
+          ]
+        }
+      ]
+    },
+    {
+      "number": "100.23",
+      "name": "Enskilt avlopp – infiltration eller markbädd",
+      "tasks": [
+        {
+          "title": "Bygg infiltration eller markbädd",
+          "activities": [
+            {"title":"Fotografera tom schaktgrop före uppbyggnad","type":"document"},
+            {"title":"Bygg föreskrivna lager och spridningsdelar","type":"perform"},
+            {"title":"Fotografera varje föreskrivet lager innan nästa täcker det","type":"document"},
+            {"title":"Kontrollera nivåer, fördelning och anslutningar","type":"check"},
+            {"title":"Fotografera färdig anläggning före sluttäckning","type":"document"},
+            {"title":"Frigör infiltration eller markbädd för sluttäckning","type":"approval"},
+            {"title":"Sluttäck och återställ mark","type":"perform"}
+          ]
+        }
+      ]
+    },
+    {
+      "number": "100.24",
+      "name": "Enskilt avlopp – slutdokumentation",
+      "tasks": [
+        {
+          "title": "Slutrapportera avloppsanläggningen",
+          "activities": [
+            {"title":"Ta översiktsbild som visar hus, brunn och infiltration eller anslutningspunkt","type":"document"},
+            {"title":"Kontrollera att alla obligatoriska avloppsfoton finns","type":"check"},
+            {"title":"Fyll i entreprenörsrapport eller motsvarande utföranderapport","type":"document"},
+            {"title":"Skicka föreskrivet slutunderlag till miljö- och byggnämnden","type":"document"},
+            {"title":"Spara tillstånd, rapport och fotodokumentation i projektets slutunderlag","type":"document"}
+          ]
+        }
+      ]
+    }
+  ]
+}
