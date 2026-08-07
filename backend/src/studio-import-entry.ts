@@ -1,8 +1,9 @@
 import app from './studio-routes';
 import { registerControlPlanRoutes } from './control-plan-routes';
 import { registerGoverningDocumentRoutes } from './governing-document-routes';
+import { registerGoverningVerificationRoutes } from './governing-verification-routes';
 
-const IMPORT_RUNTIME_VERSION = '2026-08-07-v9';
+const IMPORT_RUNTIME_VERSION = '2026-08-07-v10';
 
 type ImportClassification = {
   category?: string;
@@ -239,7 +240,7 @@ app.post('/api/studio/import-tree', async c => {
     const databaseError = error instanceof Error ? error.message : String(error);
     return c.json({
       ok: false,
-      error: `Import v9: ${databaseError}`,
+      error: `Import v10: ${databaseError}`,
       progress: {
         sections: sectionCount,
         tasks: taskCount,
@@ -265,5 +266,6 @@ app.post('/api/studio/import-tree', async c => {
 
 registerControlPlanRoutes(app as any);
 registerGoverningDocumentRoutes(app as any);
+registerGoverningVerificationRoutes(app as any);
 
 export default app;
