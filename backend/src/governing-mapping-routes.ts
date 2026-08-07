@@ -53,13 +53,13 @@ export function registerGoverningMappingRoutes(app: RouteApp) {
     const documents = await c.env.DB.prepare(`
       SELECT d.id,d.document_type,d.title,d.issuer,d.reference,
              COUNT(i.id) AS item_count,
-             SUM(CASE WHEN EXISTS(
+             SUM(CASE WHEN i.handling_status NOT IN ('not_applicable','cannot_verify','alternative_evidence') AND EXISTS(
                SELECT 1 FROM governing_item_activity_links l WHERE l.governing_item_id=i.id
              ) THEN 1 ELSE 0 END) AS mapped_count,
              SUM(CASE WHEN i.handling_status IN ('not_applicable','cannot_verify','alternative_evidence') THEN 1 ELSE 0 END) AS exception_count,
-             SUM(CASE WHEN NOT EXISTS(
+             SUM(CASE WHEN i.handling_status NOT IN ('not_applicable','cannot_verify','alternative_evidence') AND NOT EXISTS(
                SELECT 1 FROM governing_item_activity_links l WHERE l.governing_item_id=i.id
-             ) AND i.handling_status NOT IN ('not_applicable','cannot_verify','alternative_evidence') THEN 1 ELSE 0 END) AS uncovered_count
+             ) THEN 1 ELSE 0 END) AS uncovered_count
         FROM governing_documents d
         LEFT JOIN governing_items i ON i.governing_document_id=d.id
        WHERE d.project_id=?
@@ -119,21 +119,23 @@ export function registerGoverningMappingRoutes(app: RouteApp) {
       const itemCount = Number(row.item_count || 0);
       const mappedCount = Number(row.mapped_count || 0);
       const exceptionCount = Number(row.exception_count || 0);
-      const coveredCount = Math.min(itemCount,mappedCount + exceptionCount);
+      const uncoveredCount = Number(row.uncovered_count || 0);
+      const coveredCount = mappedCount + exceptionCount;
       return {
         ...row,
         item_count: itemCount,
         mapped_count: mappedCount,
         exception_count: exceptionCount,
         covered_count: coveredCount,
-        uncovered_count: Number(row.uncovered_count || 0),
+        uncovered_count: uncoveredCount,
         coverage_percent: itemCount ? Math.round(coveredCount * 100 / itemCount) : 100
       };
     });
     const total = documentRows.reduce((sum,row) => sum + row.item_count,0);
     const mapped = documentRows.reduce((sum,row) => sum + row.mapped_count,0);
     const exceptions = documentRows.reduce((sum,row) => sum + row.exception_count,0);
-    const covered = documentRows.reduce((sum,row) => sum + row.covered_count,0);
+    const uncovered = documentRows.reduce((sum,row) => sum + row.uncovered_count,0);
+    const covered = mapped + exceptions;
 
     return c.json({
       ok: true,
@@ -142,7 +144,7 @@ export function registerGoverningMappingRoutes(app: RouteApp) {
         mapped_count: mapped,
         exception_count: exceptions,
         covered_count: covered,
-        uncovered_count: Math.max(0,total-covered),
+        uncovered_count: uncovered,
         coverage_percent: total ? Math.round(covered*100/total) : 100
       },
       documents: documentRows,
