@@ -41,6 +41,17 @@ async function ensureSchema(db: D1Database) {
 }
 
 export function registerProjectSupportRoutes(app: RouteApp) {
+  app.get('/api/project-support', async c => {
+    await ensureSchema(c.env.DB);
+    const projectId = c.req.query('projectId');
+    if (!projectId) return c.json({ ok:false, error:'projectId krävs.' }, 400);
+    const [taskRows, activityRows] = await Promise.all([
+      c.env.DB.prepare(`SELECT id,task_id,resource_type,title,content_text,sort_order FROM project_task_resources WHERE project_id=? ORDER BY task_id,sort_order,id`).bind(projectId).all(),
+      c.env.DB.prepare(`SELECT id,activity_id,resource_type,title,content_text,sort_order FROM project_activity_resources WHERE project_id=? ORDER BY activity_id,sort_order,id`).bind(projectId).all()
+    ]);
+    return c.json({ ok:true, taskResources:taskRows.results, activityResources:activityRows.results });
+  });
+
   app.get('/api/studio/project-support/:ownerType/:ownerId', async c => {
     await ensureSchema(c.env.DB);
     const ownerType = c.req.param('ownerType');
