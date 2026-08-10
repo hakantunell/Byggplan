@@ -25,6 +25,18 @@ async function ensureSchema(db:D1Database){
   await safeAlter(db,`ALTER TABLE activity_execution_contexts ADD COLUMN executor_type TEXT NOT NULL DEFAULT 'self'`);
   await safeAlter(db,`ALTER TABLE activity_execution_contexts ADD COLUMN executor_label TEXT`);
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_activity_execution_context_context ON activity_execution_contexts(context)').run();
+  await db.prepare(`CREATE TABLE IF NOT EXISTS activity_classifications(
+    id TEXT PRIMARY KEY,
+    activity_id TEXT NOT NULL,
+    category TEXT NOT NULL CHECK(category IN ('documentation','control_plan','requirement')),
+    code TEXT NOT NULL,
+    label TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'project',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(activity_id,category,code),
+    FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE CASCADE
+  )`).run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_activity_classifications_activity ON activity_classifications(activity_id)').run();
 }
 
 async function classifyProject(db:D1Database,projectId:string){
@@ -49,6 +61,24 @@ async function classifyProject(db:D1Database,projectId:string){
   }
 }
 
+async function addGoverningMetadata(db:D1Database,projectId:string,items:any[]){
+  const classifications=await db.prepare(`SELECT ac.activity_id,ac.category,ac.code,ac.label,ac.source
+    FROM activity_classifications ac
+    JOIN activities a ON a.id=ac.activity_id
+    JOIN tasks t ON t.id=a.task_id
+    JOIN work_sections ws ON ws.id=t.work_section_id
+    JOIN work_areas wa ON wa.id=ws.work_area_id
+    WHERE wa.project_id=? AND ac.category IN ('control_plan','requirement')
+    ORDER BY ac.activity_id,ac.category,ac.label`).bind(projectId).all();
+  const byActivity=new Map<string,any[]>();
+  for(const row of classifications.results as any[]){
+    const list=byActivity.get(String(row.activity_id))||[];
+    list.push({category:row.category,code:row.code,label:row.label,source:row.source});
+    byActivity.set(String(row.activity_id),list);
+  }
+  return items.map(item=>({...item,governing_documents:byActivity.get(String(item.activity_id))||[]}));
+}
+
 export function registerProjectExecutionContextRoutes(app:RouteApp){
   app.get('/api/project-execution-contexts',async c=>{
     await ensureSchema(c.env.DB);
@@ -63,7 +93,8 @@ export function registerProjectExecutionContextRoutes(app:RouteApp){
       JOIN work_sections ws ON ws.id=t.work_section_id
       JOIN work_areas wa ON wa.id=ws.work_area_id
       WHERE wa.project_id=? ORDER BY wa.sort_order,ws.sort_order,t.sort_order,a.sort_order`).bind(projectId).all();
-    return c.json({ok:true,items:rows.results});
+    const items=await addGoverningMetadata(c.env.DB,projectId,rows.results as any[]);
+    return c.json({ok:true,items});
   });
 
   app.get('/api/studio/activities/:id/execution-context',async c=>{
@@ -73,7 +104,8 @@ export function registerProjectExecutionContextRoutes(app:RouteApp){
     if(!activity)return c.json({ok:false,error:'Aktiviteten hittades inte.'},404);
     await classifyProject(c.env.DB,String(activity.project_id));
     const item=await c.env.DB.prepare('SELECT activity_id,context,source,executor_type,executor_label FROM activity_execution_contexts WHERE activity_id=?').bind(id).first<any>();
-    return c.json({ok:true,item:item||{activity_id:id,context:'field',source:'system',executor_type:'self',executor_label:null}});
+    const enriched=(await addGoverningMetadata(c.env.DB,String(activity.project_id),[item||{activity_id:id,context:'field',source:'system',executor_type:'self',executor_label:null}]))[0];
+    return c.json({ok:true,item:enriched});
   });
 
   app.put('/api/studio/activities/:id/execution-context',async c=>{
