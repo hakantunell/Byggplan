@@ -112,7 +112,6 @@ async function findResource(db: D1Database, id: string) {
 
 export function registerProjectSupportRoutes(app: RouteApp) {
   app.get('/api/project-support', async c => {
-    await ensureSchema(c.env.DB);
     const projectId = c.req.query('projectId');
     if (!projectId) return c.json({ ok:false, error:'projectId krävs.' }, 400);
     const [taskRows, activityRows] = await Promise.all([
@@ -129,7 +128,6 @@ export function registerProjectSupportRoutes(app: RouteApp) {
   });
 
   app.get('/api/studio/project-support/:ownerType/:ownerId', async c => {
-    await ensureSchema(c.env.DB);
     const ownerType = c.req.param('ownerType');
     const ownerId = c.req.param('ownerId');
     let rows:any;
@@ -222,7 +220,6 @@ export function registerProjectSupportRoutes(app: RouteApp) {
   });
 
   app.get('/api/project-support-attachments/:id', async c => {
-    await ensureSchema(c.env.DB);
     const attachment = await c.env.DB.prepare('SELECT object_key,original_name,content_type FROM project_support_attachments WHERE id=?').bind(c.req.param('id')).first<any>();
     if (!attachment) return c.json({ok:false,error:'Bilagan hittades inte.'},404);
     const object = await c.env.FILES.get(attachment.object_key);
