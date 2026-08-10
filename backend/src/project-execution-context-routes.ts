@@ -66,38 +66,70 @@ function isSelfRole(value:unknown){
   return role==='' || role==='ek' || role==='egenkontroll' || role.includes('egenkontroll') || role==='byggherre' || role.includes('byggherr');
 }
 
+function appendGoverningRow(byActivity:Map<string,any[]>,row:any,source:'explicit'|'classification'){
+  const activityId=String(row.activity_id);
+  const list=byActivity.get(activityId)||[];
+  if(list.some(entry=>String(entry.itemId)===String(row.item_id)))return;
+  list.push({
+    documentId:row.document_id,
+    documentType:row.document_type,
+    documentTitle:row.document_title,
+    issuer:row.issuer,
+    itemId:row.item_id,
+    code:row.item_code,
+    label:row.item_description,
+    responsibleRole:row.responsible_role,
+    mappingSource:source
+  });
+  byActivity.set(activityId,list);
+}
+
 async function addGoverningMetadata(db:D1Database,projectId:string,items:any[]){
-  if(!(await tableExists(db,'governing_documents')) || !(await tableExists(db,'governing_items')) || !(await tableExists(db,'governing_item_activity_links'))){
+  if(!(await tableExists(db,'governing_documents')) || !(await tableExists(db,'governing_items'))){
     return items.map(item=>({...item,governing_documents:[]}));
   }
 
-  const linked=await db.prepare(`SELECT l.activity_id,
-      d.id AS document_id,d.document_type,d.title AS document_title,d.issuer,
-      i.id AS item_id,i.code AS item_code,i.description AS item_description,i.responsible_role
-    FROM governing_item_activity_links l
-    JOIN governing_items i ON i.id=l.governing_item_id
-    JOIN governing_documents d ON d.id=i.governing_document_id
-    JOIN activities a ON a.id=l.activity_id
-    JOIN tasks t ON t.id=a.task_id
-    JOIN work_sections ws ON ws.id=t.work_section_id
-    JOIN work_areas wa ON wa.id=ws.work_area_id
-    WHERE wa.project_id=? AND d.status='active'
-    ORDER BY l.activity_id,d.imported_at,i.sort_order`).bind(projectId).all();
-
   const byActivity=new Map<string,any[]>();
-  for(const row of linked.results as any[]){
-    const list=byActivity.get(String(row.activity_id))||[];
-    list.push({
-      documentId:row.document_id,
-      documentType:row.document_type,
-      documentTitle:row.document_title,
-      issuer:row.issuer,
-      itemId:row.item_id,
-      code:row.item_code,
-      label:row.item_description,
-      responsibleRole:row.responsible_role
-    });
-    byActivity.set(String(row.activity_id),list);
+
+  if(await tableExists(db,'governing_item_activity_links')){
+    const linked=await db.prepare(`SELECT l.activity_id,
+        d.id AS document_id,d.document_type,d.title AS document_title,d.issuer,
+        i.id AS item_id,i.code AS item_code,i.description AS item_description,i.responsible_role
+      FROM governing_item_activity_links l
+      JOIN governing_items i ON i.id=l.governing_item_id
+      JOIN governing_documents d ON d.id=i.governing_document_id
+      JOIN activities a ON a.id=l.activity_id
+      JOIN tasks t ON t.id=a.task_id
+      JOIN work_sections ws ON ws.id=t.work_section_id
+      JOIN work_areas wa ON wa.id=ws.work_area_id
+      WHERE wa.project_id=? AND d.status='active'
+      ORDER BY l.activity_id,d.imported_at,i.sort_order`).bind(projectId).all();
+    for(const row of linked.results as any[])appendGoverningRow(byActivity,row,'explicit');
+  }
+
+  // Backward compatibility for projects imported before explicit governing_item_activity_links
+  // were created. Activity classifications already carry the control-plan/requirement code,
+  // so an exact code match is safe enough to reconstruct the source relation.
+  if(await tableExists(db,'activity_classifications')){
+    const inferred=await db.prepare(`SELECT ac.activity_id,
+        d.id AS document_id,d.document_type,d.title AS document_title,d.issuer,
+        i.id AS item_id,i.code AS item_code,i.description AS item_description,i.responsible_role
+      FROM activity_classifications ac
+      JOIN activities a ON a.id=ac.activity_id
+      JOIN tasks t ON t.id=a.task_id
+      JOIN work_sections ws ON ws.id=t.work_section_id
+      JOIN work_areas wa ON wa.id=ws.work_area_id
+      JOIN governing_documents d ON d.project_id=wa.project_id AND d.status='active'
+      JOIN governing_items i ON i.governing_document_id=d.id
+        AND lower(trim(i.code))=lower(trim(ac.code))
+      WHERE wa.project_id=?
+        AND trim(ac.code)<>''
+        AND (
+          (ac.category='control_plan' AND d.document_type='control_plan') OR
+          (ac.category='requirement' AND d.document_type<>'control_plan')
+        )
+      ORDER BY ac.activity_id,d.imported_at,i.sort_order`).bind(projectId).all();
+    for(const row of inferred.results as any[])appendGoverningRow(byActivity,row,'classification');
   }
 
   return items.map(item=>{
