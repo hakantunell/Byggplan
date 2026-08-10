@@ -3,6 +3,7 @@ type RouteApp = {
 };
 
 type JsonUploadBody = {
+  probe?: boolean;
   name?: string;
   contentType?: string;
   dataBase64?: string;
@@ -52,6 +53,10 @@ export function registerProjectSupportJsonUploadRoutes(app: RouteApp) {
     if (!resource) return c.json({ ok:false, error:'Underlaget hittades inte.' }, 404);
 
     const body = await c.req.json<JsonUploadBody>().catch(() => null);
+    if (body?.probe === true) {
+      return c.json({ ok:true, probe:true, route:'project-support-file' });
+    }
+
     const name = typeof body?.name === 'string' ? body.name.trim() : '';
     const contentType = typeof body?.contentType === 'string' ? body.contentType.trim() : '';
     const dataBase64 = typeof body?.dataBase64 === 'string' ? body.dataBase64.trim() : '';
