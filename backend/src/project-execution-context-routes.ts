@@ -12,6 +12,11 @@ const ADMIN_TITLES=[
 
 async function safeAlter(db:D1Database,sql:string){try{await db.prepare(sql).run()}catch(error){const message=String(error);if(!message.includes('duplicate column name'))throw error}}
 
+async function tableExists(db:D1Database,table:string){
+  const row=await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").bind(table).first();
+  return Boolean(row);
+}
+
 async function ensureSchema(db:D1Database){
   await db.prepare(`CREATE TABLE IF NOT EXISTS activity_execution_contexts(
     activity_id TEXT PRIMARY KEY,
@@ -25,18 +30,6 @@ async function ensureSchema(db:D1Database){
   await safeAlter(db,`ALTER TABLE activity_execution_contexts ADD COLUMN executor_type TEXT NOT NULL DEFAULT 'self'`);
   await safeAlter(db,`ALTER TABLE activity_execution_contexts ADD COLUMN executor_label TEXT`);
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_activity_execution_context_context ON activity_execution_contexts(context)').run();
-  await db.prepare(`CREATE TABLE IF NOT EXISTS activity_classifications(
-    id TEXT PRIMARY KEY,
-    activity_id TEXT NOT NULL,
-    category TEXT NOT NULL CHECK(category IN ('documentation','control_plan','requirement')),
-    code TEXT NOT NULL,
-    label TEXT NOT NULL,
-    source TEXT NOT NULL DEFAULT 'project',
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(activity_id,category,code),
-    FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE CASCADE
-  )`).run();
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_activity_classifications_activity ON activity_classifications(activity_id)').run();
 }
 
 async function classifyProject(db:D1Database,projectId:string){
@@ -68,22 +61,62 @@ async function classifyProject(db:D1Database,projectId:string){
   )`).bind(projectId).run();
 }
 
+function isSelfRole(value:unknown){
+  const role=String(value??'').trim().toLocaleLowerCase('sv');
+  return role==='' || role==='ek' || role==='egenkontroll' || role.includes('egenkontroll') || role==='byggherre' || role.includes('byggherr');
+}
+
 async function addGoverningMetadata(db:D1Database,projectId:string,items:any[]){
-  const classifications=await db.prepare(`SELECT ac.activity_id,ac.category,ac.code,ac.label,ac.source
-    FROM activity_classifications ac
-    JOIN activities a ON a.id=ac.activity_id
+  if(!(await tableExists(db,'governing_documents')) || !(await tableExists(db,'governing_items')) || !(await tableExists(db,'governing_item_activity_links'))){
+    return items.map(item=>({...item,governing_documents:[]}));
+  }
+
+  const linked=await db.prepare(`SELECT l.activity_id,
+      d.id AS document_id,d.document_type,d.title AS document_title,d.issuer,
+      i.id AS item_id,i.code AS item_code,i.description AS item_description,i.responsible_role
+    FROM governing_item_activity_links l
+    JOIN governing_items i ON i.id=l.governing_item_id
+    JOIN governing_documents d ON d.id=i.governing_document_id
+    JOIN activities a ON a.id=l.activity_id
     JOIN tasks t ON t.id=a.task_id
     JOIN work_sections ws ON ws.id=t.work_section_id
     JOIN work_areas wa ON wa.id=ws.work_area_id
-    WHERE wa.project_id=? AND ac.category IN ('control_plan','requirement')
-    ORDER BY ac.activity_id,ac.category,ac.label`).bind(projectId).all();
+    WHERE wa.project_id=? AND d.status='active'
+    ORDER BY l.activity_id,d.imported_at,i.sort_order`).bind(projectId).all();
+
   const byActivity=new Map<string,any[]>();
-  for(const row of classifications.results as any[]){
+  for(const row of linked.results as any[]){
     const list=byActivity.get(String(row.activity_id))||[];
-    list.push({category:row.category,code:row.code,label:row.label,source:row.source});
+    list.push({
+      documentId:row.document_id,
+      documentType:row.document_type,
+      documentTitle:row.document_title,
+      issuer:row.issuer,
+      itemId:row.item_id,
+      code:row.item_code,
+      label:row.item_description,
+      responsibleRole:row.responsible_role
+    });
     byActivity.set(String(row.activity_id),list);
   }
-  return items.map(item=>({...item,governing_documents:byActivity.get(String(item.activity_id))||[]}));
+
+  return items.map(item=>{
+    const governingDocuments=byActivity.get(String(item.activity_id))||[];
+    if(item.source==='manual' || governingDocuments.length===0){
+      return {...item,governing_documents:governingDocuments};
+    }
+
+    const externalRoles=[...new Set(governingDocuments
+      .map((entry:any)=>String(entry.responsibleRole??'').trim())
+      .filter((role:string)=>role && !isSelfRole(role)))];
+
+    return {
+      ...item,
+      executor_type:externalRoles.length?'third_party':'self',
+      executor_label:externalRoles.length?externalRoles.join(' / '):null,
+      governing_documents:governingDocuments
+    };
+  });
 }
 
 export function registerProjectExecutionContextRoutes(app:RouteApp){
@@ -100,8 +133,8 @@ export function registerProjectExecutionContextRoutes(app:RouteApp){
       JOIN work_sections ws ON ws.id=t.work_section_id
       JOIN work_areas wa ON wa.id=ws.work_area_id
       WHERE wa.project_id=? ORDER BY wa.sort_order,ws.sort_order,t.sort_order,a.sort_order`).bind(projectId).all();
-    const items=await addGoverningMetadata(c.env.DB,projectId,rows.results as any[]);
-    return c.json({ok:true,items});
+    const enriched=await addGoverningMetadata(c.env.DB,projectId,rows.results as any[]);
+    return c.json({ok:true,items:enriched});
   });
 
   app.get('/api/studio/activities/:id/execution-context',async c=>{
