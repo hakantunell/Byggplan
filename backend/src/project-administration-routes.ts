@@ -14,6 +14,23 @@ const DEFAULT_ITEMS = [
   'BAS-U är utsedd'
 ];
 
+const ADMIN_TITLE_MAP:Record<string,string> = {
+  'Kontrollera att startbesked finns':'Startbesked finns',
+  'Registrera BAS-P':'BAS-P är utsedd',
+  'Registrera BAS-U':'BAS-U är utsedd',
+  'Sätt upp arbetsmiljöplan där det krävs':'Arbetsmiljöplan är upprättad'
+};
+
+const ADMIN_TITLES = new Set([
+  'Kontrollera att startbesked finns',
+  'Registrera BAS-P',
+  'Registrera BAS-U',
+  'Genomför startmöte med byggherre och KA',
+  'Sätt upp arbetsmiljöplan där det krävs',
+  'Kontrollera att elinstallationsföretaget är registrerat',
+  'Registrera behörighet eller redovisa vald våtrumsmetod'
+]);
+
 function text(value: unknown) { return typeof value === 'string' ? value.trim() : ''; }
 
 async function ensureSchema(db: D1Database) {
@@ -32,14 +49,40 @@ async function ensureSchema(db: D1Database) {
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_project_administration_project ON project_administration_items(project_id,sort_order,id)').run();
 }
 
+async function insertMissing(db:D1Database,projectId:string,title:string,sortOrder:number){
+  const existing=await db.prepare('SELECT id FROM project_administration_items WHERE project_id=? AND title=?').bind(projectId,title).first();
+  if(existing)return false;
+  await db.prepare('INSERT INTO project_administration_items(id,project_id,title,sort_order) VALUES(?,?,?,?)')
+    .bind(crypto.randomUUID(),projectId,title,sortOrder).run();
+  return true;
+}
+
 async function ensureDefaults(db: D1Database, projectId: string) {
-  const count = await db.prepare('SELECT COUNT(*) AS count FROM project_administration_items WHERE project_id=?').bind(projectId).first<{count:number}>();
-  if (Number(count?.count || 0) > 0) return;
-  let sortOrder = 10;
-  for (const title of DEFAULT_ITEMS) {
-    await db.prepare('INSERT INTO project_administration_items(id,project_id,title,sort_order) VALUES(?,?,?,?)')
-      .bind(crypto.randomUUID(), projectId, title, sortOrder).run();
-    sortOrder += 10;
+  let orderRow=await db.prepare('SELECT COALESCE(MAX(sort_order),0) AS max_order FROM project_administration_items WHERE project_id=?').bind(projectId).first<{max_order:number}>();
+  let sortOrder=Number(orderRow?.max_order||0);
+  for(const title of DEFAULT_ITEMS){
+    sortOrder+=10;
+    await insertMissing(db,projectId,title,sortOrder);
+  }
+}
+
+async function syncAdministrativeActivities(db:D1Database,projectId:string){
+  const rows=await db.prepare(`SELECT a.title,wa.name AS work_area
+    FROM activities a
+    JOIN tasks t ON t.id=a.task_id
+    JOIN work_sections ws ON ws.id=t.work_section_id
+    JOIN work_areas wa ON wa.id=ws.work_area_id
+    WHERE wa.project_id=?
+    ORDER BY wa.sort_order,ws.sort_order,t.sort_order,a.sort_order`).bind(projectId).all();
+  const orderRow=await db.prepare('SELECT COALESCE(MAX(sort_order),0) AS max_order FROM project_administration_items WHERE project_id=?').bind(projectId).first<{max_order:number}>();
+  let sortOrder=Number(orderRow?.max_order||0);
+  for(const row of rows.results as any[]){
+    const sourceTitle=String(row.title||'');
+    const administrative=ADMIN_TITLES.has(sourceTitle)||String(row.work_area)==='Slutkontroll och slutbesked';
+    if(!administrative)continue;
+    const title=ADMIN_TITLE_MAP[sourceTitle]||sourceTitle;
+    sortOrder+=10;
+    await insertMissing(db,projectId,title,sortOrder);
   }
 }
 
@@ -51,6 +94,7 @@ export function registerProjectAdministrationRoutes(app: RouteApp) {
     const project = await c.env.DB.prepare('SELECT id FROM projects WHERE id=?').bind(projectId).first();
     if (!project) return c.json({ok:false,error:'Projektet hittades inte.'},404);
     await ensureDefaults(c.env.DB,projectId);
+    await syncAdministrativeActivities(c.env.DB,projectId);
     const result = await c.env.DB.prepare('SELECT id,title,completed,value_text,note,sort_order FROM project_administration_items WHERE project_id=? ORDER BY sort_order,id').bind(projectId).all();
     return c.json({ok:true,items:result.results});
   });
