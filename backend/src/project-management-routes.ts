@@ -65,18 +65,30 @@ async function deleteReferencingRows(
   }
 }
 
-async function deleteTechnicalResources(db:D1Database,projectId:string){
+async function deleteTechnicalResources(db:D1Database,projectId:string,schema:SchemaTable[]){
   const resourceIds='SELECT id FROM technical_resources WHERE project_id=?';
-  // Do not rely on a hard-coded list here. The D1 database has gone through
-  // several schema generations, so discover every real FK descendant from
-  // sqlite_master and remove descendants from leaves to root. This avoids the
-  // PRAGMA calls that D1 rejected with SQLITE_AUTH.
-  const schema=await loadSchemaTables(db);
   await deleteReferencingRows(db,schema,'technical_resources',resourceIds,projectId,new Set());
   await safeRun(db,'DELETE FROM technical_resources WHERE project_id=?',projectId);
 }
 
+async function deleteCurrentProjectTasks(db:D1Database,projectId:string,schema:SchemaTable[]){
+  const taskIds=`SELECT t.id FROM tasks t
+    JOIN work_sections ws ON ws.id=t.work_section_id
+    JOIN work_areas wa ON wa.id=ws.work_area_id
+    WHERE wa.project_id=?`;
+  await deleteReferencingRows(db,schema,'tasks',taskIds,projectId,new Set());
+  await safeRun(db,`DELETE FROM tasks WHERE id IN (${taskIds})`,projectId);
+}
+
+async function deleteLegacyProjectTasks(db:D1Database,projectId:string,schema:SchemaTable[]){
+  const taskIds='SELECT id FROM tasks WHERE project_id=?';
+  await deleteReferencingRows(db,schema,'tasks',taskIds,projectId,new Set());
+  await safeRun(db,`DELETE FROM tasks WHERE id IN (${taskIds})`,projectId);
+}
+
 async function deleteProjectData(db:D1Database,projectId:string){
+  const schema=await loadSchemaTables(db);
+
   // Legacy v0/v1 data.
   await safeRun(db,`DELETE FROM files WHERE requirement_id IN (SELECT id FROM requirements WHERE project_id=?)`,projectId);
   await safeRun(db,`DELETE FROM answers WHERE requirement_id IN (SELECT id FROM requirements WHERE project_id=?)`,projectId);
@@ -102,48 +114,20 @@ async function deleteProjectData(db:D1Database,projectId:string){
   await safeRun(db,'DELETE FROM control_plan_documents WHERE project_id=?',projectId);
 
   // Technical resources and every actual FK descendant in the deployed schema.
-  await deleteTechnicalResources(db,projectId);
+  await deleteTechnicalResources(db,projectId,schema);
 
   // Membership/roles.
   await safeRun(db,'DELETE FROM project_member_roles WHERE project_id=?',projectId);
   await safeRun(db,'DELETE FROM project_memberships WHERE project_id=?',projectId);
 
-  // Activity-owned data.
-  const projectActivities=`SELECT a.id FROM activities a
-    JOIN tasks t ON t.id=a.task_id
-    JOIN work_sections ws ON ws.id=t.work_section_id
-    JOIN work_areas wa ON wa.id=ws.work_area_id
-    WHERE wa.project_id=?`;
-  await safeRun(db,`DELETE FROM activity_documentation_entries WHERE field_id IN (
-    SELECT f.id FROM activity_documentation_fields f WHERE f.activity_id IN (${projectActivities})
-  )`,projectId);
-  await safeRun(db,`DELETE FROM activity_documentation_fields WHERE activity_id IN (${projectActivities})`,projectId);
-  await safeRun(db,`DELETE FROM activity_entries WHERE activity_id IN (${projectActivities})`,projectId);
-  await safeRun(db,`DELETE FROM activity_classifications WHERE activity_id IN (${projectActivities})`,projectId);
-  await safeRun(db,`DELETE FROM activity_execution_contexts WHERE activity_id IN (${projectActivities})`,projectId);
-  await safeRun(db,`DELETE FROM activity_documentation_profiles WHERE activity_id IN (${projectActivities})`,projectId);
-  await safeRun(db,`DELETE FROM governing_item_activity_links WHERE activity_id IN (${projectActivities})`,projectId);
-
-  // Current hierarchy, leaves to root.
-  await safeRun(db,`DELETE FROM activities WHERE task_id IN (
-    SELECT t.id FROM tasks t JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id WHERE wa.project_id=?
-  )`,projectId);
-  await safeRun(db,`DELETE FROM tasks WHERE work_section_id IN (
-    SELECT ws.id FROM work_sections ws JOIN work_areas wa ON wa.id=ws.work_area_id WHERE wa.project_id=?
-  )`,projectId);
+  // Current hierarchy. All real FK descendants of tasks are removed dynamically
+  // before task deletion, so older/newer task child tables cannot block it.
+  await deleteCurrentProjectTasks(db,projectId,schema);
   await safeRun(db,`DELETE FROM work_sections WHERE work_area_id IN (SELECT id FROM work_areas WHERE project_id=?)`,projectId);
   await safeRun(db,'DELETE FROM work_areas WHERE project_id=?',projectId);
 
   // Very first tasks.project_id hierarchy.
-  await safeRun(db,`DELETE FROM files WHERE requirement_id IN (
-    SELECT r.id FROM requirements r JOIN tasks t ON t.id=r.task_id WHERE t.project_id=?
-  )`,projectId);
-  await safeRun(db,`DELETE FROM answers WHERE requirement_id IN (
-    SELECT r.id FROM requirements r JOIN tasks t ON t.id=r.task_id WHERE t.project_id=?
-  )`,projectId);
-  await safeRun(db,`DELETE FROM requirements WHERE task_id IN (SELECT id FROM tasks WHERE project_id=?)`,projectId);
-  await safeRun(db,`DELETE FROM notifications WHERE task_id IN (SELECT id FROM tasks WHERE project_id=?)`,projectId);
-  await safeRun(db,'DELETE FROM tasks WHERE project_id=?',projectId);
+  await deleteLegacyProjectTasks(db,projectId,schema);
 }
 
 export function registerProjectManagementRoutes(app:RouteApp){
