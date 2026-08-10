@@ -25,6 +25,14 @@ function sanitizeFileName(name: string) {
   return safe.slice(0, 120) || 'bilaga';
 }
 
+function isUploadedFile(value: unknown): value is File {
+  return Boolean(value && typeof value === 'object' &&
+    typeof (value as any).arrayBuffer === 'function' &&
+    typeof (value as any).stream === 'function' &&
+    typeof (value as any).size === 'number' &&
+    typeof (value as any).type === 'string');
+}
+
 async function ensureSchema(db: D1Database) {
   await db.prepare(`CREATE TABLE IF NOT EXISTS project_task_resources(
     id TEXT PRIMARY KEY,
@@ -174,30 +182,43 @@ export function registerProjectSupportRoutes(app: RouteApp) {
     const resourceId = c.req.param('id');
     const resource = await findResource(c.env.DB,resourceId);
     if (!resource) return c.json({ok:false,error:'Underlaget hittades inte.'},404);
-    const form = await c.req.parseBody();
-    const upload = form.file;
-    if (!(upload instanceof File)) return c.json({ok:false,error:'Ingen fil valdes.'},400);
+
+    let form: FormData;
+    try {
+      form = await c.req.raw.formData();
+    } catch (error) {
+      console.error('Support attachment formData parse failed', error);
+      return c.json({ok:false,error:'Kunde inte läsa den uppladdade filen. Försök igen.'},400);
+    }
+    const upload = form.get('file');
+    if (!isUploadedFile(upload)) return c.json({ok:false,error:'Ingen giltig fil valdes.'},400);
     if (upload.size <= 0) return c.json({ok:false,error:'Filen är tom.'},400);
     if (upload.size > 20 * 1024 * 1024) return c.json({ok:false,error:'Filen får vara högst 20 MB.'},413);
     const isImage = upload.type.startsWith('image/');
     const isPdf = upload.type === 'application/pdf';
-    if (!isImage && !isPdf) return c.json({ok:false,error:'Endast bilder och PDF-filer stöds just nu.'},415);
+    if (!isImage && !isPdf) return c.json({ok:false,error:`Filtypen ${upload.type || 'okänd'} stöds inte. Endast bilder och PDF-filer stöds just nu.`},415);
+
+    if (!c.env.FILES || typeof c.env.FILES.put !== 'function') {
+      console.error('Support attachment upload missing FILES binding');
+      return c.json({ok:false,error:'Fillagringen är inte tillgänglig i API:t.'},503);
+    }
 
     const id = crypto.randomUUID();
-    const safeName = sanitizeFileName(upload.name || (isPdf ? 'bilaga.pdf' : 'bild'));
+    const originalName = typeof (upload as any).name === 'string' && (upload as any).name ? (upload as any).name : (isPdf ? 'bilaga.pdf' : 'bild');
+    const safeName = sanitizeFileName(originalName);
     const objectKey = `projects/${resource.project_id}/support/${resourceId}/${id}-${safeName}`;
     await c.env.FILES.put(objectKey,upload.stream(),{
       httpMetadata:{contentType:upload.type || 'application/octet-stream'},
-      customMetadata:{projectId:String(resource.project_id),resourceId,originalName:upload.name || safeName}
+      customMetadata:{projectId:String(resource.project_id),resourceId,originalName}
     });
     try {
       const order = await c.env.DB.prepare('SELECT COALESCE(MAX(sort_order),0)+10 AS next_order FROM project_support_attachments WHERE resource_id=?').bind(resourceId).first<any>();
-      await c.env.DB.prepare(`INSERT INTO project_support_attachments(id,project_id,resource_id,object_key,original_name,content_type,size_bytes,sort_order) VALUES(?,?,?,?,?,?,?,?)`).bind(id,resource.project_id,resourceId,objectKey,upload.name || safeName,upload.type || 'application/octet-stream',upload.size,Number(order?.next_order ?? 10)).run();
+      await c.env.DB.prepare(`INSERT INTO project_support_attachments(id,project_id,resource_id,object_key,original_name,content_type,size_bytes,sort_order) VALUES(?,?,?,?,?,?,?,?)`).bind(id,resource.project_id,resourceId,objectKey,originalName,upload.type || 'application/octet-stream',upload.size,Number(order?.next_order ?? 10)).run();
     } catch (error) {
       await c.env.FILES.delete(objectKey);
       throw error;
     }
-    return c.json({ok:true,attachment:{id,originalName:upload.name || safeName,contentType:upload.type,sizeBytes:upload.size,url:`/api/project-support-attachments/${id}`}},201);
+    return c.json({ok:true,attachment:{id,originalName,contentType:upload.type,sizeBytes:upload.size,url:`/api/project-support-attachments/${id}`}},201);
   });
 
   app.get('/api/project-support-attachments/:id', async c => {
