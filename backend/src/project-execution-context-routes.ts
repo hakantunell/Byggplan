@@ -10,14 +10,20 @@ const ADMIN_TITLES=new Set([
   'Registrera behörighet eller redovisa vald våtrumsmetod'
 ]);
 
+async function safeAlter(db:D1Database,sql:string){try{await db.prepare(sql).run()}catch(error){const message=String(error);if(!message.includes('duplicate column name'))throw error}}
+
 async function ensureSchema(db:D1Database){
   await db.prepare(`CREATE TABLE IF NOT EXISTS activity_execution_contexts(
     activity_id TEXT PRIMARY KEY,
     context TEXT NOT NULL CHECK(context IN ('field','administrative')),
     source TEXT NOT NULL DEFAULT 'system',
+    executor_type TEXT NOT NULL DEFAULT 'self',
+    executor_label TEXT,
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE CASCADE
   )`).run();
+  await safeAlter(db,`ALTER TABLE activity_execution_contexts ADD COLUMN executor_type TEXT NOT NULL DEFAULT 'self'`);
+  await safeAlter(db,`ALTER TABLE activity_execution_contexts ADD COLUMN executor_label TEXT`);
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_activity_execution_context_context ON activity_execution_contexts(context)').run();
 }
 
@@ -49,7 +55,7 @@ export function registerProjectExecutionContextRoutes(app:RouteApp){
     const projectId=c.req.query('projectId');
     if(!projectId)return c.json({ok:false,error:'projectId krävs.'},400);
     await classifyProject(c.env.DB,projectId);
-    const rows=await c.env.DB.prepare(`SELECT ec.activity_id,ec.context,ec.source,a.title,a.description,a.activity_type,
+    const rows=await c.env.DB.prepare(`SELECT ec.activity_id,ec.context,ec.source,ec.executor_type,ec.executor_label,a.title,a.description,a.activity_type,
       t.title AS task_title,ws.name AS section_name,wa.name AS work_area
       FROM activity_execution_contexts ec
       JOIN activities a ON a.id=ec.activity_id
@@ -60,17 +66,32 @@ export function registerProjectExecutionContextRoutes(app:RouteApp){
     return c.json({ok:true,items:rows.results});
   });
 
+  app.get('/api/studio/activities/:id/execution-context',async c=>{
+    await ensureSchema(c.env.DB);
+    const id=c.req.param('id');
+    const activity=await c.env.DB.prepare(`SELECT a.id,wa.project_id FROM activities a JOIN tasks t ON t.id=a.task_id JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id WHERE a.id=?`).bind(id).first<any>();
+    if(!activity)return c.json({ok:false,error:'Aktiviteten hittades inte.'},404);
+    await classifyProject(c.env.DB,String(activity.project_id));
+    const item=await c.env.DB.prepare('SELECT activity_id,context,source,executor_type,executor_label FROM activity_execution_contexts WHERE activity_id=?').bind(id).first<any>();
+    return c.json({ok:true,item:item||{activity_id:id,context:'field',source:'system',executor_type:'self',executor_label:null}});
+  });
+
   app.put('/api/studio/activities/:id/execution-context',async c=>{
     await ensureSchema(c.env.DB);
-    const body=await c.req.json<{context?:string}>().catch(()=>({}));
-    if(body.context!=='field'&&body.context!=='administrative')return c.json({ok:false,error:'Context måste vara field eller administrative.'},400);
+    const body=await c.req.json<{context?:string;executorType?:string;executorLabel?:string|null}>().catch(()=>({}));
+    if(body.context!==undefined&&body.context!=='field'&&body.context!=='administrative')return c.json({ok:false,error:'Context måste vara field eller administrative.'},400);
+    if(body.executorType!==undefined&&body.executorType!=='self'&&body.executorType!=='third_party')return c.json({ok:false,error:'Utförare måste vara self eller third_party.'},400);
     const activity=await c.env.DB.prepare('SELECT id FROM activities WHERE id=?').bind(c.req.param('id')).first();
     if(!activity)return c.json({ok:false,error:'Aktiviteten hittades inte.'},404);
-    await c.env.DB.prepare(`INSERT INTO activity_execution_contexts(activity_id,context,source,updated_at)
-      VALUES(?,?,'manual',datetime('now'))
-      ON CONFLICT(activity_id) DO UPDATE SET context=excluded.context,source='manual',updated_at=datetime('now')`)
-      .bind(c.req.param('id'),body.context).run();
-    if(body.context==='administrative')await c.env.DB.prepare('UPDATE activities SET required=0 WHERE id=?').bind(c.req.param('id')).run();
+    const existing=await c.env.DB.prepare('SELECT context,executor_type,executor_label FROM activity_execution_contexts WHERE activity_id=?').bind(c.req.param('id')).first<any>();
+    const context=body.context??existing?.context??'field';
+    const executorType=body.executorType??existing?.executor_type??'self';
+    const executorLabel=executorType==='third_party'?(body.executorLabel??existing?.executor_label??null):null;
+    await c.env.DB.prepare(`INSERT INTO activity_execution_contexts(activity_id,context,source,executor_type,executor_label,updated_at)
+      VALUES(?,?,'manual',?,?,datetime('now'))
+      ON CONFLICT(activity_id) DO UPDATE SET context=excluded.context,source='manual',executor_type=excluded.executor_type,executor_label=excluded.executor_label,updated_at=datetime('now')`)
+      .bind(c.req.param('id'),context,executorType,executorLabel).run();
+    if(context==='administrative')await c.env.DB.prepare('UPDATE activities SET required=0 WHERE id=?').bind(c.req.param('id')).run();
     return c.json({ok:true});
   });
 }
