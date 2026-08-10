@@ -24,6 +24,13 @@ const STARTBESKED_LABEL='Startbesked finns';
 function clean(value:unknown){return typeof value==='string'?value.trim():''}
 
 async function ensureSchema(db:D1Database){
+  await db.prepare(`CREATE TABLE IF NOT EXISTS activity_execution_contexts(
+    activity_id TEXT PRIMARY KEY,
+    context TEXT NOT NULL CHECK(context IN ('field','administrative')),
+    source TEXT NOT NULL DEFAULT 'system',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE CASCADE
+  )`).run();
   await db.prepare(`CREATE TABLE IF NOT EXISTS activity_dependencies(
     id TEXT PRIMARY KEY,
     activity_id TEXT NOT NULL,
@@ -54,8 +61,6 @@ async function projectIdForActivity(db:D1Database,activityId:string){
 
 async function seedStartbeskedLocks(db:D1Database,projectId:string){
   await ensureSchema(db);
-  // Activities in the explicit pre-start area stay available (e.g. setting-out
-  // and reference-height checks). Administrative activities are never field locks.
   const rows=await db.prepare(`SELECT a.id
     FROM activities a
     JOIN tasks t ON t.id=a.task_id
@@ -140,7 +145,6 @@ export async function activityDependencyGuard(c:any,next:()=>Promise<void>){
   const match=path.match(/^\/api\/activities\/([^/]+)$/);
   if(!match)return next();
   const activityId=decodeURIComponent(match[1]);
-  // If the activity is already done we allow the request so it can be undone.
   const entry=await c.env.DB.prepare('SELECT done FROM activity_entries WHERE activity_id=?').bind(activityId).first<{done:number}>();
   if(entry?.done)return next();
   const {blockers}=await hardBlockersForActivity(c.env.DB,activityId);
