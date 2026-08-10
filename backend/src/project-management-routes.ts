@@ -21,14 +21,30 @@ async function safeRun(db:D1Database,sql:string,projectId:string){
 }
 
 async function deleteProjectData(db:D1Database,projectId:string){
-  // Project-global data and files first.
+  // Project documents and support resources: children before parents.
   await safeRun(db,'DELETE FROM project_document_attachments WHERE project_id=?',projectId);
   await safeRun(db,'DELETE FROM project_documents WHERE project_id=?',projectId);
   await safeRun(db,'DELETE FROM project_support_attachments WHERE project_id=?',projectId);
   await safeRun(db,'DELETE FROM project_task_resources WHERE project_id=?',projectId);
   await safeRun(db,'DELETE FROM project_activity_resources WHERE project_id=?',projectId);
   await safeRun(db,'DELETE FROM project_administration_items WHERE project_id=?',projectId);
+
+  // Governing documents: explicitly remove link/item children first because
+  // older databases may not have ON DELETE CASCADE on every foreign key.
+  await safeRun(db,`DELETE FROM governing_item_activity_links WHERE governing_item_id IN (
+    SELECT i.id FROM governing_items i
+    JOIN governing_documents d ON d.id=i.governing_document_id
+    WHERE d.project_id=?
+  )`,projectId);
+  await safeRun(db,`DELETE FROM governing_items WHERE governing_document_id IN (
+    SELECT id FROM governing_documents WHERE project_id=?
+  )`,projectId);
   await safeRun(db,'DELETE FROM governing_documents WHERE project_id=?',projectId);
+
+  // Imported control plans: points must be removed before their documents.
+  await safeRun(db,`DELETE FROM control_plan_points WHERE control_plan_id IN (
+    SELECT id FROM control_plan_documents WHERE project_id=?
+  )`,projectId);
   await safeRun(db,'DELETE FROM control_plan_documents WHERE project_id=?',projectId);
 
   // Technical resources can have their own link table.
@@ -86,6 +102,7 @@ async function deleteProjectData(db:D1Database,projectId:string){
     JOIN work_areas wa ON wa.id=ws.work_area_id
     WHERE wa.project_id=?
   )`,projectId);
+  // Any governing links left through activities are removed as a safety net.
   await safeRun(db,`DELETE FROM governing_item_activity_links WHERE activity_id IN (
     SELECT a.id FROM activities a
     JOIN tasks t ON t.id=a.task_id
