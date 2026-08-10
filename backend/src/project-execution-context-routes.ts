@@ -30,12 +30,16 @@ async function classifyProject(db:D1Database,projectId:string){
     WHERE wa.project_id=?`).bind(projectId).all();
   for(const row of rows.results as any[]){
     const administrative=ADMIN_TITLES.has(String(row.title)) || String(row.work_area)==='Slutkontroll och slutbesked';
-    const existing=await db.prepare('SELECT source FROM activity_execution_contexts WHERE activity_id=?').bind(row.id).first<any>();
-    if(existing?.source==='manual')continue;
+    const existing=await db.prepare('SELECT context,source FROM activity_execution_contexts WHERE activity_id=?').bind(row.id).first<any>();
+    if(existing?.source==='manual'){
+      if(existing.context==='administrative')await db.prepare('UPDATE activities SET required=0 WHERE id=?').bind(row.id).run();
+      continue;
+    }
     await db.prepare(`INSERT INTO activity_execution_contexts(activity_id,context,source,updated_at)
       VALUES(?,?, 'system', datetime('now'))
       ON CONFLICT(activity_id) DO UPDATE SET context=excluded.context,source='system',updated_at=datetime('now')`)
       .bind(row.id,administrative?'administrative':'field').run();
+    if(administrative)await db.prepare('UPDATE activities SET required=0 WHERE id=?').bind(row.id).run();
   }
 }
 
@@ -66,6 +70,7 @@ export function registerProjectExecutionContextRoutes(app:RouteApp){
       VALUES(?,?,'manual',datetime('now'))
       ON CONFLICT(activity_id) DO UPDATE SET context=excluded.context,source='manual',updated_at=datetime('now')`)
       .bind(c.req.param('id'),body.context).run();
+    if(body.context==='administrative')await c.env.DB.prepare('UPDATE activities SET required=0 WHERE id=?').bind(c.req.param('id')).run();
     return c.json({ok:true});
   });
 }
