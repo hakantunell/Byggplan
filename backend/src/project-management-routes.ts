@@ -11,13 +11,17 @@ async function deleteProjectFiles(bucket:R2Bucket,projectId:string){
   }while(cursor);
 }
 
+function describeSql(sql:string){
+  return sql.replace(/\s+/g,' ').trim().slice(0,180);
+}
+
 async function safeRun(db:D1Database,sql:string,projectId:string){
   try{return await db.prepare(sql).bind(projectId).run();}
   catch(error){
     const message=error instanceof Error?error.message:String(error);
     const lower=message.toLowerCase();
     if(lower.includes('no such table')||lower.includes('no such column'))return null;
-    throw error;
+    throw new Error(`Raderingssteg misslyckades: ${describeSql(sql)} :: ${message}`);
   }
 }
 
@@ -167,7 +171,13 @@ export function registerProjectManagementRoutes(app:RouteApp){
     try{
       await deleteProjectFiles(c.env.FILES,projectId);
       await deleteProjectData(c.env.DB,projectId);
-      const result=await c.env.DB.prepare('DELETE FROM projects WHERE id=?').bind(projectId).run();
+      let result;
+      try{
+        result=await c.env.DB.prepare('DELETE FROM projects WHERE id=?').bind(projectId).run();
+      }catch(error){
+        const message=error instanceof Error?error.message:String(error);
+        throw new Error(`Slutsteg DELETE FROM projects misslyckades :: ${message}`);
+      }
       if(!result.meta.changes)return c.json({ok:false,error:'Projektet hittades inte.'},404);
       return c.json({ok:true,id:projectId,name:project.name});
     }catch(error){
