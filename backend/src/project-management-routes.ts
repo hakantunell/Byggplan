@@ -22,9 +22,15 @@ async function safeRun(db:D1Database,sql:string,projectId:string){
 }
 
 async function deleteProjectData(db:D1Database,projectId:string){
-  // Legacy v1 project tables still exist in some D1 databases. Remove these
-  // first because they reference projects/tasks directly and can otherwise
-  // block deletion even though the current UI no longer uses them.
+  // Legacy v0/v1 project tables. Some early schemas kept answers/files as
+  // children of requirements and notifications as children of tasks without
+  // ON DELETE CASCADE. Remove the full dependency chain explicitly.
+  await safeRun(db,`DELETE FROM files WHERE requirement_id IN (
+    SELECT id FROM requirements WHERE project_id=?
+  )`,projectId);
+  await safeRun(db,`DELETE FROM answers WHERE requirement_id IN (
+    SELECT id FROM requirements WHERE project_id=?
+  )`,projectId);
   await safeRun(db,'DELETE FROM requirements WHERE project_id=?',projectId);
   await safeRun(db,'DELETE FROM notifications WHERE project_id=?',projectId);
   await safeRun(db,'DELETE FROM activity_events WHERE project_id=?',projectId);
@@ -135,8 +141,20 @@ async function deleteProjectData(db:D1Database,projectId:string){
   )`,projectId);
   await safeRun(db,'DELETE FROM work_areas WHERE project_id=?',projectId);
 
-  // Safety net for databases that still have the very first tasks.project_id
-  // schema rather than the normalized work_section_id hierarchy.
+  // Legacy tasks.project_id hierarchy. First clear old child tables that only
+  // carry task_id (no project_id) before deleting those tasks.
+  await safeRun(db,`DELETE FROM files WHERE requirement_id IN (
+    SELECT r.id FROM requirements r JOIN tasks t ON t.id=r.task_id WHERE t.project_id=?
+  )`,projectId);
+  await safeRun(db,`DELETE FROM answers WHERE requirement_id IN (
+    SELECT r.id FROM requirements r JOIN tasks t ON t.id=r.task_id WHERE t.project_id=?
+  )`,projectId);
+  await safeRun(db,`DELETE FROM requirements WHERE task_id IN (
+    SELECT id FROM tasks WHERE project_id=?
+  )`,projectId);
+  await safeRun(db,`DELETE FROM notifications WHERE task_id IN (
+    SELECT id FROM tasks WHERE project_id=?
+  )`,projectId);
   await safeRun(db,'DELETE FROM tasks WHERE project_id=?',projectId);
 }
 
