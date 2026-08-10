@@ -1,6 +1,6 @@
 type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void;put:(path:string,handler:(c:any)=>unknown)=>void};
 
-const ADMIN_TITLES=new Set([
+const ADMIN_TITLES=[
   'Kontrollera att startbesked finns',
   'Registrera BAS-P',
   'Registrera BAS-U',
@@ -8,7 +8,7 @@ const ADMIN_TITLES=new Set([
   'Sätt upp arbetsmiljöplan där det krävs',
   'Kontrollera att elinstallationsföretaget är registrerat',
   'Registrera behörighet eller redovisa vald våtrumsmetod'
-]);
+];
 
 async function safeAlter(db:D1Database,sql:string){try{await db.prepare(sql).run()}catch(error){const message=String(error);if(!message.includes('duplicate column name'))throw error}}
 
@@ -40,25 +40,32 @@ async function ensureSchema(db:D1Database){
 }
 
 async function classifyProject(db:D1Database,projectId:string){
-  const rows=await db.prepare(`SELECT a.id,a.title,wa.name AS work_area
+  const titlePlaceholders=ADMIN_TITLES.map(()=>'?').join(',');
+  const params=[...ADMIN_TITLES,projectId];
+  await db.prepare(`INSERT INTO activity_execution_contexts(activity_id,context,source,executor_type,updated_at)
+    SELECT a.id,
+      CASE WHEN a.title IN (${titlePlaceholders}) OR wa.name='Slutkontroll och slutbesked' THEN 'administrative' ELSE 'field' END,
+      'system','self',datetime('now')
     FROM activities a
     JOIN tasks t ON t.id=a.task_id
     JOIN work_sections ws ON ws.id=t.work_section_id
     JOIN work_areas wa ON wa.id=ws.work_area_id
-    WHERE wa.project_id=?`).bind(projectId).all();
-  for(const row of rows.results as any[]){
-    const administrative=ADMIN_TITLES.has(String(row.title)) || String(row.work_area)==='Slutkontroll och slutbesked';
-    const existing=await db.prepare('SELECT context,source FROM activity_execution_contexts WHERE activity_id=?').bind(row.id).first<any>();
-    if(existing?.source==='manual'){
-      if(existing.context==='administrative')await db.prepare('UPDATE activities SET required=0 WHERE id=?').bind(row.id).run();
-      continue;
-    }
-    await db.prepare(`INSERT INTO activity_execution_contexts(activity_id,context,source,updated_at)
-      VALUES(?,?, 'system', datetime('now'))
-      ON CONFLICT(activity_id) DO UPDATE SET context=excluded.context,source='system',updated_at=datetime('now')`)
-      .bind(row.id,administrative?'administrative':'field').run();
-    if(administrative)await db.prepare('UPDATE activities SET required=0 WHERE id=?').bind(row.id).run();
-  }
+    WHERE wa.project_id=?
+    ON CONFLICT(activity_id) DO UPDATE SET
+      context=excluded.context,
+      source='system',
+      updated_at=datetime('now')
+    WHERE activity_execution_contexts.source<>'manual'`).bind(...params).run();
+
+  await db.prepare(`UPDATE activities SET required=0 WHERE id IN (
+    SELECT ec.activity_id
+    FROM activity_execution_contexts ec
+    JOIN activities a ON a.id=ec.activity_id
+    JOIN tasks t ON t.id=a.task_id
+    JOIN work_sections ws ON ws.id=t.work_section_id
+    JOIN work_areas wa ON wa.id=ws.work_area_id
+    WHERE wa.project_id=? AND ec.context='administrative'
+  )`).bind(projectId).run();
 }
 
 async function addGoverningMetadata(db:D1Database,projectId:string,items:any[]){
