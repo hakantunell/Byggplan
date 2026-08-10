@@ -43,8 +43,6 @@ async function deleteProjectData(db:D1Database,projectId:string){
   await safeRun(db,'DELETE FROM project_document_attachments WHERE project_id=?',projectId);
   await safeRun(db,'DELETE FROM project_documents WHERE project_id=?',projectId);
   await safeRun(db,'DELETE FROM project_support_attachments WHERE project_id=?',projectId);
-  await safeRun(db,'DELETE FROM project_task_resources WHERE project_id=?',projectId);
-  await safeRun(db,'DELETE FROM project_activity_resources WHERE project_id=?',projectId);
   await safeRun(db,'DELETE FROM project_administration_items WHERE project_id=?',projectId);
 
   // Governing documents: explicitly remove link/item children first because
@@ -65,7 +63,14 @@ async function deleteProjectData(db:D1Database,projectId:string){
   )`,projectId);
   await safeRun(db,'DELETE FROM control_plan_documents WHERE project_id=?',projectId);
 
-  // Technical resources can have their own link table.
+  // Technical resources. Some link tables do not carry project_id themselves,
+  // so remove rows through technical_resource_id before deleting the resource.
+  await safeRun(db,`DELETE FROM project_task_resources WHERE technical_resource_id IN (
+    SELECT id FROM technical_resources WHERE project_id=?
+  )`,projectId);
+  await safeRun(db,`DELETE FROM project_activity_resources WHERE technical_resource_id IN (
+    SELECT id FROM technical_resources WHERE project_id=?
+  )`,projectId);
   await safeRun(db,`DELETE FROM technical_resource_links WHERE technical_resource_id IN (
     SELECT id FROM technical_resources WHERE project_id=?
   )`,projectId);
