@@ -15,12 +15,20 @@ async function safeRun(db:D1Database,sql:string,projectId:string){
   try{return await db.prepare(sql).bind(projectId).run();}
   catch(error){
     const message=error instanceof Error?error.message:String(error);
-    if(message.toLowerCase().includes('no such table'))return null;
+    const lower=message.toLowerCase();
+    if(lower.includes('no such table')||lower.includes('no such column'))return null;
     throw error;
   }
 }
 
 async function deleteProjectData(db:D1Database,projectId:string){
+  // Legacy v1 project tables still exist in some D1 databases. Remove these
+  // first because they reference projects/tasks directly and can otherwise
+  // block deletion even though the current UI no longer uses them.
+  await safeRun(db,'DELETE FROM requirements WHERE project_id=?',projectId);
+  await safeRun(db,'DELETE FROM notifications WHERE project_id=?',projectId);
+  await safeRun(db,'DELETE FROM activity_events WHERE project_id=?',projectId);
+
   // Project documents and support resources: children before parents.
   await safeRun(db,'DELETE FROM project_document_attachments WHERE project_id=?',projectId);
   await safeRun(db,'DELETE FROM project_documents WHERE project_id=?',projectId);
@@ -102,7 +110,6 @@ async function deleteProjectData(db:D1Database,projectId:string){
     JOIN work_areas wa ON wa.id=ws.work_area_id
     WHERE wa.project_id=?
   )`,projectId);
-  // Any governing links left through activities are removed as a safety net.
   await safeRun(db,`DELETE FROM governing_item_activity_links WHERE activity_id IN (
     SELECT a.id FROM activities a
     JOIN tasks t ON t.id=a.task_id
@@ -111,7 +118,7 @@ async function deleteProjectData(db:D1Database,projectId:string){
     WHERE wa.project_id=?
   )`,projectId);
 
-  // Finally remove the project tree from leaves to root.
+  // Current hierarchy, leaves to root.
   await safeRun(db,`DELETE FROM activities WHERE task_id IN (
     SELECT t.id FROM tasks t
     JOIN work_sections ws ON ws.id=t.work_section_id
@@ -127,6 +134,10 @@ async function deleteProjectData(db:D1Database,projectId:string){
     SELECT id FROM work_areas WHERE project_id=?
   )`,projectId);
   await safeRun(db,'DELETE FROM work_areas WHERE project_id=?',projectId);
+
+  // Safety net for databases that still have the very first tasks.project_id
+  // schema rather than the normalized work_section_id hierarchy.
+  await safeRun(db,'DELETE FROM tasks WHERE project_id=?',projectId);
 }
 
 export function registerProjectManagementRoutes(app:RouteApp){
