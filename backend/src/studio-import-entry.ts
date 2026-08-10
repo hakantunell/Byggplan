@@ -4,8 +4,9 @@ import { registerGoverningDocumentRoutes } from './governing-document-routes';
 import { registerGoverningVerificationRoutes } from './governing-verification-routes';
 import { registerGoverningMappingRoutes } from './governing-mapping-routes';
 import { registerProjectDocumentRoutes } from './project-document-routes';
+import { registerProjectAdministrationRoutes } from './project-administration-routes';
 
-const IMPORT_RUNTIME_VERSION = '2026-08-10-v12';
+const IMPORT_RUNTIME_VERSION = '2026-08-10-v13';
 
 type ImportClassification = {
   category?: string;
@@ -173,7 +174,7 @@ app.post('/api/studio/import-tree', async c => {
   } catch (error) {
     console.error('Studio tree import failed', error);
     const databaseError = error instanceof Error ? error.message : String(error);
-    return c.json({ ok: false, error: `Import v12: ${databaseError}`, progress: { sections: sectionCount, tasks: taskCount, activities: activityCount, classifications: classificationCount }, version: IMPORT_RUNTIME_VERSION }, 500);
+    return c.json({ ok: false, error: `Import v13: ${databaseError}`, progress: { sections: sectionCount, tasks: taskCount, activities: activityCount, classifications: classificationCount }, version: IMPORT_RUNTIME_VERSION }, 500);
   }
 
   return c.json({ ok: true, version: IMPORT_RUNTIME_VERSION, workAreaId, created: { sections: sectionCount, tasks: taskCount, activities: activityCount, classifications: classificationCount } }, 201);
@@ -184,5 +185,6 @@ registerGoverningDocumentRoutes(app as any);
 registerGoverningVerificationRoutes(app as any);
 registerGoverningMappingRoutes(app as any);
 registerProjectDocumentRoutes(app as any);
+registerProjectAdministrationRoutes(app as any);
 
 export default app;
