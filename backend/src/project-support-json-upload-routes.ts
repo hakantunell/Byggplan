@@ -46,7 +46,7 @@ async function findResource(db: D1Database, id: string) {
 }
 
 export function registerProjectSupportJsonUploadRoutes(app: RouteApp) {
-  app.post('/api/studio/project-support/:id/file', async c => {
+  app.post('/api/u/:id', async c => {
     await ensureAttachmentSchema(c.env.DB);
     const resourceId = c.req.param('id');
     const resource = await findResource(c.env.DB, resourceId);
@@ -54,7 +54,7 @@ export function registerProjectSupportJsonUploadRoutes(app: RouteApp) {
 
     const body = await c.req.json<JsonUploadBody>().catch(() => null);
     if (body?.probe === true) {
-      return c.json({ ok:true, probe:true, route:'project-support-file' });
+      return c.json({ ok:true, probe:true, route:'u' });
     }
 
     const name = typeof body?.name === 'string' ? body.name.trim() : '';
@@ -66,7 +66,6 @@ export function registerProjectSupportJsonUploadRoutes(app: RouteApp) {
     const isPdf = contentType === 'application/pdf';
     if (!isImage && !isPdf) return c.json({ ok:false, error:`Filtypen ${contentType || 'okänd'} stöds inte. Endast bilder och PDF-filer stöds just nu.` }, 415);
 
-    // 20 MB raw data becomes at most about 28 MB base64.
     if (dataBase64.length > 28 * 1024 * 1024) return c.json({ ok:false, error:'Filen får vara högst 20 MB.' }, 413);
 
     let bytes: Uint8Array;
