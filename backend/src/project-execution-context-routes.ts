@@ -1,5 +1,6 @@
 type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void;put:(path:string,handler:(c:any)=>unknown)=>void};
 
+// Known-good field icon metadata implementation. Keep this read path stable while deployment is verified.
 const ADMIN_TITLES=[
   'Kontrollera att startbesked finns',
   'Registrera BAS-P',
@@ -149,9 +150,6 @@ async function addGoverningMetadata(db:D1Database,projectId:string,items:any[]){
     for(const row of inferred.results as any[]){appendGoverningRow(byActivity,row,'classification');mappedItems.add(String(row.item_id));}
   }
 
-  // Runtime fallback for older projects where the governing document was imported but its
-  // rows were never explicitly linked to activities. Only high-confidence, unique matches
-  // are exposed to the field app; nothing is persisted here.
   const governingRows=await db.prepare(`SELECT
       d.id AS document_id,d.document_type,d.title AS document_title,d.issuer,
       i.id AS item_id,i.code AS item_code,i.description AS item_description,
