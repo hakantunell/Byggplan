@@ -29,8 +29,10 @@ export function registerProjectExecutionDiagnosticsRoutes(app:RouteApp){
     const hasLinks=await tableExists(c.env.DB,'governing_item_activity_links');
     const hasClassifications=await tableExists(c.env.DB,'activity_classifications');
     const hasExecution=await tableExists(c.env.DB,'activity_execution_contexts');
+    const hasLegacyDocs=await tableExists(c.env.DB,'control_plan_documents');
+    const hasLegacyPoints=await tableExists(c.env.DB,'control_plan_points');
 
-    let activeDocuments=0,governingItems=0,explicitLinks=0,classifications=0,executionRows=0;
+    let activeDocuments=0,governingItems=0,explicitLinks=0,classifications=0,executionRows=0,legacyDocuments=0,legacyPoints=0;
     if(hasDocs){
       const row=await c.env.DB.prepare("SELECT COUNT(*) AS count FROM governing_documents WHERE project_id=? AND status='active'").bind(projectId).first<any>();
       activeDocuments=Number(row?.count||0);
@@ -68,6 +70,16 @@ export function registerProjectExecutionDiagnosticsRoutes(app:RouteApp){
         WHERE wa.project_id=?`).bind(projectId).first<any>();
       executionRows=Number(row?.count||0);
     }
+    if(hasLegacyDocs){
+      const row=await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM control_plan_documents WHERE project_id=?`).bind(projectId).first<any>();
+      legacyDocuments=Number(row?.count||0);
+    }
+    if(hasLegacyDocs&&hasLegacyPoints){
+      const row=await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM control_plan_points p
+        JOIN control_plan_documents d ON d.id=p.control_plan_id
+        WHERE d.project_id=?`).bind(projectId).first<any>();
+      legacyPoints=Number(row?.count||0);
+    }
 
     let sample:any[]=[];
     if(hasDocs&&hasItems){
@@ -79,6 +91,16 @@ export function registerProjectExecutionDiagnosticsRoutes(app:RouteApp){
       sample=rows.results as any[];
     }
 
+    let legacySample:any[]=[];
+    if(hasLegacyDocs&&hasLegacyPoints){
+      const rows=await c.env.DB.prepare(`SELECT p.code,p.description,p.responsible_role,p.point_type,d.title AS document_title,d.status
+        FROM control_plan_points p
+        JOIN control_plan_documents d ON d.id=p.control_plan_id
+        WHERE d.project_id=?
+        ORDER BY d.imported_at,p.sort_order LIMIT 20`).bind(projectId).all();
+      legacySample=rows.results as any[];
+    }
+
     return c.json({
       ok:true,
       projectId,
@@ -88,16 +110,21 @@ export function registerProjectExecutionDiagnosticsRoutes(app:RouteApp){
         governingItems,
         explicitLinks,
         classifications,
-        executionRows
+        executionRows,
+        legacyDocuments,
+        legacyPoints
       },
       tables:{
         governing_documents:hasDocs,
         governing_items:hasItems,
         governing_item_activity_links:hasLinks,
         activity_classifications:hasClassifications,
-        activity_execution_contexts:hasExecution
+        activity_execution_contexts:hasExecution,
+        control_plan_documents:hasLegacyDocs,
+        control_plan_points:hasLegacyPoints
       },
-      sample
+      sample,
+      legacySample
     });
   });
 }
