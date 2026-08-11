@@ -5,6 +5,7 @@ import { registerProjectSupportAttachmentUploadRoutes } from './project-support-
 import { registerProjectSupportRoutes } from './project-support-routes';
 import { registerProjectSupportJsonUploadRoutes } from './project-support-json-upload-routes';
 import { registerProjectExecutionContextRoutes } from './project-execution-context-routes';
+import { registerProjectExecutionDiagnosticsRoutes } from './project-execution-diagnostics-routes';
 import { registerProjectManagementRoutes } from './project-management-routes';
 
 registerMasterProjectRoutes(app as any);
@@ -13,6 +14,7 @@ registerProjectSupportAttachmentUploadRoutes(app as any);
 registerProjectSupportRoutes(app as any);
 registerProjectSupportJsonUploadRoutes(app as any);
 registerProjectExecutionContextRoutes(app as any);
+registerProjectExecutionDiagnosticsRoutes(app as any);
 registerProjectManagementRoutes(app as any);
 
 export default app;
