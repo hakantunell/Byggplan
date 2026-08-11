@@ -27,22 +27,108 @@ async function ensureMappingSchema(db: D1Database) {
   `).run();
 }
 
-function words(value: unknown) {
-  return String(value || '')
-    .toLocaleLowerCase('sv-SE')
-    .replace(/[^a-zåäö0-9 ]/g,' ')
-    .split(/\s+/)
-    .filter(word => word.length >= 4 && !['enligt','eller','samt','skall','ska','utförd','utföras','kontroll','kontrollera','dokumentation'].includes(word));
+function normalized(value: unknown) {
+  return String(value || '').toLocaleLowerCase('sv-SE')
+    .replace(/[–—]/g,'-').replace(/[^a-zåäö0-9+\-/ ]/g,' ').replace(/\s+/g,' ').trim();
 }
 
+const STOP_WORDS = new Set([
+  'enligt','eller','samt','skall','ska','utförd','utföras','kontroll','kontrollera','dokumentation',
+  'upprättad','beaktad','genomför','genomförd','erforderlig','erforderliga','byggnaden','byggnadens','projektet'
+]);
+
+function words(value: unknown) {
+  return normalized(value).split(/\s+/).filter(word => word.length >= 4 && !STOP_WORDS.has(word));
+}
+
+type ConceptRule = { code:string; patterns:RegExp[] };
+const CONCEPTS: ConceptRule[] = [
+  {code:'setout',patterns:[/utsätt/,/referenshöjd/]},
+  {code:'location_control',patterns:[/lägeskontroll/,/kontrollmät/,/mätintyg/,/byggnadens placering/]},
+  {code:'bas_p',patterns:[/bas-p/,/bas p/]},
+  {code:'bas_u',patterns:[/bas-u/,/bas u/]},
+  {code:'work_environment',patterns:[/arbetsmiljö/]},
+  {code:'start_meeting',patterns:[/startmöte/]},
+  {code:'ka_ground_visit',patterns:[/besök.*grundbotten/,/grundbotten.*ka/]},
+  {code:'ka_frame_visit',patterns:[/besök.*stomm.*rest/,/stomm.*rest.*ka/]},
+  {code:'authority_site_visit',patterns:[/arbetsplatsbesök/,/byggnadsnämnd.*besök/]},
+  {code:'permit_conformance',patterns:[/överensstämmelse.*bygglov/,/bygglov.*överensstämmelse/,/färdig.*mot.*lov/]},
+  {code:'geotechnical',patterns:[/geotekn/]},
+  {code:'radon',patterns:[/radon/]},
+  {code:'structural_control',patterns:[/bärande stom/,/konstruktionshandling/,/stomkontroll/]},
+  {code:'fire_description',patterns:[/brandskyddsbeskriv/]},
+  {code:'fire_documentation',patterns:[/brandskyddsdokument/]},
+  {code:'fire',patterns:[/brandskydd/,/brandvarn/,/rökkanal/,/sotar/,/eldstad/]},
+  {code:'stormwater',patterns:[/dagvatten/,/markfall/,/\blod\b/]},
+  {code:'wetroom_method',patterns:[/byggkeramik/,/våtrumsmetod/,/tätskikt/]},
+  {code:'moisture',patterns:[/fuktsäker/,/fuktskydd/,/fukt/]},
+  {code:'vvs_pressure',patterns:[/provtryck/,/täthets.*vvs/,/vvs.*täthet/]},
+  {code:'vvs',patterns:[/\bvvs\b/,/spillvatten/,/vatteninstallation/,/\bva\b/]},
+  {code:'electrical_contractor',patterns:[/elinstallationsföretag/,/registrerat.*el/]},
+  {code:'electrical_insulation',patterns:[/isolationsprov/]},
+  {code:'electrical_rcd',patterns:[/jordfelsbryt/]},
+  {code:'electrical',patterns:[/elinstallation/,/elarbet/,/elintyg/,/elsäker/]},
+  {code:'architect_control',patterns:[/arkitektens egenkontroll/]},
+  {code:'accessibility',patterns:[/tillgänglighet/,/användbarhet/]},
+  {code:'broadband',patterns:[/bredband/,/fiberanslut/,/fiber/]},
+  {code:'final_docs',patterns:[/slutdokument/,/relationshandling/,/intyg.*protokoll/]}
+];
+
+function concepts(value: unknown) {
+  const text = normalized(value);
+  const result = new Set<string>();
+  for (const rule of CONCEPTS) if (rule.patterns.some(pattern => pattern.test(text))) result.add(rule.code);
+  return result;
+}
+
+function broadDomain(code: string) {
+  if (['setout','location_control'].includes(code)) return 'location';
+  if (['bas_p','bas_u','work_environment','start_meeting'].includes(code)) return 'administration';
+  if (['ka_ground_visit','geotechnical','radon'].includes(code)) return 'ground';
+  if (['ka_frame_visit','structural_control'].includes(code)) return 'structure';
+  if (['authority_site_visit','permit_conformance'].includes(code)) return 'authority';
+  if (code.startsWith('fire')) return 'fire';
+  if (code === 'stormwater') return 'stormwater';
+  if (code === 'wetroom_method') return 'wetroom';
+  if (code === 'moisture') return 'moisture';
+  if (code.startsWith('vvs')) return 'vvs';
+  if (code.startsWith('electrical')) return 'electrical';
+  if (['architect_control','accessibility'].includes(code)) return 'architecture';
+  if (code === 'broadband') return 'broadband';
+  return code;
+}
+
+function overlap<T>(a:Set<T>,b:Set<T>) { for (const x of a) if (b.has(x)) return true; return false; }
+
 function similarity(item: any, activity: any) {
-  const source = new Set(words(`${item.description} ${item.section_title} ${item.source_note || ''}`));
-  const target = new Set(words(`${activity.title} ${activity.description || ''} ${activity.task_title} ${activity.section_name} ${activity.area_name}`));
-  if (!source.size || !target.size) return 0;
-  let hits = 0;
-  for (const word of source) if (target.has(word)) hits += 1;
-  const ratio = hits / Math.max(2, Math.min(source.size,target.size));
-  return Math.min(96, Math.round(ratio * 100));
+  const sourceText = `${item.description} ${item.section_title} ${item.source_note || ''}`;
+  const targetText = `${activity.title} ${activity.description || ''} ${activity.task_title} ${activity.section_name} ${activity.area_name}`;
+  const sourceConcepts = concepts(sourceText);
+  const targetConcepts = concepts(targetText);
+  const sourceDomains = new Set([...sourceConcepts].map(broadDomain));
+  const targetDomains = new Set([...targetConcepts].map(broadDomain));
+
+  // A known subject area must never be matched to another known subject area.
+  if (sourceDomains.size && targetDomains.size && !overlap(sourceDomains,targetDomains)) return 0;
+
+  const sourceWords = new Set(words(sourceText));
+  const targetWords = new Set(words(targetText));
+  let wordHits = 0;
+  for (const word of sourceWords) if (targetWords.has(word)) wordHits += 1;
+  const lexical = sourceWords.size && targetWords.size
+    ? Math.round(35 * wordHits / Math.max(2,Math.min(sourceWords.size,targetWords.size))) : 0;
+
+  const exactConcept = overlap(sourceConcepts,targetConcepts);
+  const sameDomain = overlap(sourceDomains,targetDomains);
+  let score = lexical;
+  if (exactConcept) score += 62;
+  else if (sameDomain) score += 36;
+
+  // If the source has a clear concept but the activity cannot even be classified,
+  // only lexical evidence is allowed and it must be strong.
+  if (sourceConcepts.size && !targetConcepts.size) score = Math.min(score, lexical >= 24 ? 48 : 0);
+
+  return Math.max(0,Math.min(98,score));
 }
 
 export function registerGoverningMappingRoutes(app: RouteApp) {
@@ -101,91 +187,41 @@ export function registerGoverningMappingRoutes(app: RouteApp) {
       if (Number(item.mapped_activity_count || 0) > 0 || EXCEPTION_STATUSES.includes(String(item.handling_status || ''))) continue;
       const ranked = activityRows
         .map(activity => ({ activity, confidence: similarity(item,activity) }))
-        .filter(candidate => candidate.confidence >= 25)
+        .filter(candidate => candidate.confidence >= 48)
         .sort((a,b) => b.confidence-a.confidence)
         .slice(0,3)
         .map(candidate => ({
-          activity_id: candidate.activity.id,
-          title: candidate.activity.title,
-          task_title: candidate.activity.task_title,
-          section_name: candidate.activity.section_name,
-          area_name: candidate.activity.area_name,
-          confidence: candidate.confidence
+          activity_id: candidate.activity.id,title:candidate.activity.title,task_title:candidate.activity.task_title,
+          section_name:candidate.activity.section_name,area_name:candidate.activity.area_name,confidence:candidate.confidence
         }));
       if (ranked.length) suggestions[String(item.id)] = ranked;
     }
 
     const documentRows = (documents.results as any[]).map(row => {
-      const itemCount = Number(row.item_count || 0);
-      const mappedCount = Number(row.mapped_count || 0);
-      const exceptionCount = Number(row.exception_count || 0);
-      const uncoveredCount = Number(row.uncovered_count || 0);
-      const coveredCount = mappedCount + exceptionCount;
-      return {
-        ...row,
-        item_count: itemCount,
-        mapped_count: mappedCount,
-        exception_count: exceptionCount,
-        covered_count: coveredCount,
-        uncovered_count: uncoveredCount,
-        coverage_percent: itemCount ? Math.round(coveredCount * 100 / itemCount) : 100
-      };
+      const itemCount=Number(row.item_count||0),mappedCount=Number(row.mapped_count||0),exceptionCount=Number(row.exception_count||0),uncoveredCount=Number(row.uncovered_count||0);
+      const coveredCount=mappedCount+exceptionCount;
+      return {...row,item_count:itemCount,mapped_count:mappedCount,exception_count:exceptionCount,covered_count:coveredCount,uncovered_count:uncoveredCount,coverage_percent:itemCount?Math.round(coveredCount*100/itemCount):100};
     });
-    const total = documentRows.reduce((sum,row) => sum + row.item_count,0);
-    const mapped = documentRows.reduce((sum,row) => sum + row.mapped_count,0);
-    const exceptions = documentRows.reduce((sum,row) => sum + row.exception_count,0);
-    const uncovered = documentRows.reduce((sum,row) => sum + row.uncovered_count,0);
-    const covered = mapped + exceptions;
-
-    return c.json({
-      ok: true,
-      summary: {
-        item_count: total,
-        mapped_count: mapped,
-        exception_count: exceptions,
-        covered_count: covered,
-        uncovered_count: uncovered,
-        coverage_percent: total ? Math.round(covered*100/total) : 100
-      },
-      documents: documentRows,
-      items: items.results,
-      activities: activityRows,
-      suggestions
-    });
+    const total=documentRows.reduce((s,r)=>s+r.item_count,0),mapped=documentRows.reduce((s,r)=>s+r.mapped_count,0),exceptions=documentRows.reduce((s,r)=>s+r.exception_count,0),uncovered=documentRows.reduce((s,r)=>s+r.uncovered_count,0),covered=mapped+exceptions;
+    return c.json({ok:true,summary:{item_count:total,mapped_count:mapped,exception_count:exceptions,covered_count:covered,uncovered_count:uncovered,coverage_percent:total?Math.round(covered*100/total):100},documents:documentRows,items:items.results,activities:activityRows,suggestions});
   });
 
   app.put('/api/studio/governing-items/:itemId/mappings/:activityId', async c => {
     await ensureMappingSchema(c.env.DB);
-    const itemId = c.req.param('itemId');
-    const activityId = c.req.param('activityId');
-    const body = await c.req.json<Record<string,unknown>>().catch(() => ({}));
-    const pair = await c.env.DB.prepare(`
-      SELECT i.id AS item_id,a.id AS activity_id
-        FROM governing_items i
-        JOIN governing_documents d ON d.id=i.governing_document_id
-        JOIN activities a
-        JOIN tasks t ON t.id=a.task_id
-        JOIN work_sections ws ON ws.id=t.work_section_id
-        JOIN work_areas wa ON wa.id=ws.work_area_id
-       WHERE i.id=? AND a.id=? AND d.project_id=wa.project_id
+    const itemId=c.req.param('itemId'),activityId=c.req.param('activityId');
+    const body=await c.req.json<Record<string,unknown>>().catch(()=>({}));
+    const pair=await c.env.DB.prepare(`
+      SELECT i.id AS item_id,a.id AS activity_id FROM governing_items i
+      JOIN governing_documents d ON d.id=i.governing_document_id JOIN activities a
+      JOIN tasks t ON t.id=a.task_id JOIN work_sections ws ON ws.id=t.work_section_id
+      JOIN work_areas wa ON wa.id=ws.work_area_id WHERE i.id=? AND a.id=? AND d.project_id=wa.project_id
     `).bind(itemId,activityId).first();
-    if (!pair) return c.json({ ok: false, error: 'Posten och aktiviteten tillhör inte samma projekt.' }, 409);
-
-    const rawConfidence = Number(body.confidence);
-    const confidence = Number.isFinite(rawConfidence) ? Math.max(0,Math.min(100,Math.round(rawConfidence))) : null;
-    const source = String(body.mappingSource || 'manual') === 'suggested' ? 'suggested' : 'manual';
-    const comment = typeof body.comment === 'string' ? body.comment.trim() : '';
-
-    await c.env.DB.prepare(`
-      INSERT INTO governing_item_activity_links
-        (id,governing_item_id,activity_id,link_type,mapping_source,confidence,mapping_comment,created_at,confirmed_at)
+    if(!pair)return c.json({ok:false,error:'Posten och aktiviteten tillhör inte samma projekt.'},409);
+    const rawConfidence=Number(body.confidence);const confidence=Number.isFinite(rawConfidence)?Math.max(0,Math.min(100,Math.round(rawConfidence))):null;
+    const source=String(body.mappingSource||'manual')==='suggested'?'suggested':'manual';const comment=typeof body.comment==='string'?body.comment.trim():'';
+    await c.env.DB.prepare(`INSERT INTO governing_item_activity_links(id,governing_item_id,activity_id,link_type,mapping_source,confidence,mapping_comment,created_at,confirmed_at)
       VALUES(?,?,?,'supports',?,?,?,datetime('now'),datetime('now'))
-      ON CONFLICT(governing_item_id,activity_id) DO UPDATE SET
-        mapping_source=excluded.mapping_source,
-        confidence=excluded.confidence,
-        mapping_comment=excluded.mapping_comment,
-        confirmed_at=datetime('now')
-    `).bind(crypto.randomUUID(),itemId,activityId,source,confidence,comment).run();
-    return c.json({ ok: true });
+      ON CONFLICT(governing_item_id,activity_id) DO UPDATE SET mapping_source=excluded.mapping_source,confidence=excluded.confidence,mapping_comment=excluded.mapping_comment,confirmed_at=datetime('now')`).bind(crypto.randomUUID(),itemId,activityId,source,confidence,comment).run();
+    return c.json({ok:true});
   });
 }
