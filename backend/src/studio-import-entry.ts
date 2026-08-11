@@ -2,12 +2,12 @@ import app from './studio-routes';
 import { registerControlPlanRoutes } from './control-plan-routes';
 import { registerGoverningDocumentRoutes } from './governing-document-routes';
 import { registerGoverningVerificationRoutesV2 } from './governing-verification-routes-v2';
-import { registerGoverningMappingRoutes } from './governing-mapping-routes';
+import { registerGoverningMappingRoutesV2 } from './governing-mapping-routes-v2';
 import { registerProjectDocumentRoutes } from './project-document-routes';
 import { registerProjectAdministrationRoutes } from './project-administration-routes';
 import { registerProjectManagementRoutes } from './project-management-routes';
 
-const IMPORT_RUNTIME_VERSION = '2026-08-11-v14';
+const IMPORT_RUNTIME_VERSION = '2026-08-11-v15';
 
 type ImportClassification = { category?: string; code?: string; label?: string; source?: string };
 type ImportActivity = { title?: string; description?: string; type?: string; classifications?: ImportClassification[] };
@@ -73,14 +73,14 @@ app.post('/api/studio/import-tree', async c => {
       }
     }
     if(!sectionCount){ if(createdArea)await c.env.DB.prepare('DELETE FROM work_areas WHERE id=?').bind(workAreaId).run(); return c.json({ok:false,error:'Importen innehåller inga giltiga arbetsavsnitt.',version:IMPORT_RUNTIME_VERSION},400); }
-  }catch(error){ console.error('Studio tree import failed',error); const databaseError=error instanceof Error?error.message:String(error); return c.json({ok:false,error:`Import v14: ${databaseError}`,progress:{sections:sectionCount,tasks:taskCount,activities:activityCount,classifications:classificationCount},version:IMPORT_RUNTIME_VERSION},500); }
+  }catch(error){ console.error('Studio tree import failed',error); const databaseError=error instanceof Error?error.message:String(error); return c.json({ok:false,error:`Import v15: ${databaseError}`,progress:{sections:sectionCount,tasks:taskCount,activities:activityCount,classifications:classificationCount},version:IMPORT_RUNTIME_VERSION},500); }
   return c.json({ok:true,version:IMPORT_RUNTIME_VERSION,workAreaId,created:{sections:sectionCount,tasks:taskCount,activities:activityCount,classifications:classificationCount}},201);
 });
 
 registerControlPlanRoutes(app as any);
 registerGoverningDocumentRoutes(app as any);
 registerGoverningVerificationRoutesV2(app as any);
-registerGoverningMappingRoutes(app as any);
+registerGoverningMappingRoutesV2(app as any);
 registerProjectDocumentRoutes(app as any);
 registerProjectAdministrationRoutes(app as any);
 registerProjectManagementRoutes(app as any);
