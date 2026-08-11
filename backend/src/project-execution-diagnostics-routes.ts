@@ -7,8 +7,15 @@ async function tableExists(db:D1Database,table:string){
 
 export function registerProjectExecutionDiagnosticsRoutes(app:RouteApp){
   app.get('/api/project-execution-contexts-diagnostics',async c=>{
-    const projectId=String(c.req.query('projectId')||'').trim();
-    if(!projectId)return c.json({ok:false,error:'projectId krävs.'},400);
+    let projectId=String(c.req.query('projectId')||'').trim();
+    if(!projectId){
+      const projects=await c.env.DB.prepare('SELECT id,name FROM projects ORDER BY sort_order,name').all();
+      if((projects.results as any[]).length===1){
+        projectId=String((projects.results as any[])[0].id);
+      }else{
+        return c.json({ok:false,error:'projectId krävs när databasen innehåller flera projekt.',projects:projects.results},400);
+      }
+    }
 
     const activityCount=await c.env.DB.prepare(`SELECT COUNT(*) AS count
       FROM activities a
