@@ -53,6 +53,17 @@ export function registerGoverningDocumentFileRoutes(app:RouteApp){
     return c.json({ok:true,id:documentId,document:{id:documentId,title,documentType,issuer,file:{originalName,contentType,sizeBytes:Number((upload as any).size||0),url:`/api/governing-document-files/${documentId}`}}},201);
   });
 
+  app.post('/api/studio/governing-documents/:id/prepare-linking',async c=>{
+    await ensureSchema(c.env.DB);const id=c.req.param('id');const body=await c.req.json<{projectId?:string}>().catch(()=>({}));const projectId=clean(body.projectId);
+    const row=await c.env.DB.prepare('SELECT id,project_id,status FROM governing_documents WHERE id=?').bind(id).first<any>();
+    if(!row)return c.json({ok:false,error:'Styrdokumentet hittades inte.'},404);
+    if(projectId&&String(row.project_id)!==projectId)return c.json({ok:false,error:'Styrdokumentet tillhör inte valt projekt.'},409);
+    const file=await c.env.DB.prepare('SELECT document_id FROM governing_document_files WHERE document_id=?').bind(id).first();
+    if(!file)return c.json({ok:false,error:'Styrdokumentet saknar originalfil.'},409);
+    await c.env.DB.prepare("UPDATE governing_documents SET status='review',updated_at=datetime('now') WHERE id=?").bind(id).run();
+    return c.json({ok:true,message:'Dokumentet är markerat för granskning. Nästa steg är att tolka krav och kontrollpunkter och matcha dem mot befintliga aktiviteter innan något skapas.'});
+  });
+
   app.get('/api/governing-document-files/:id',async c=>{
     await ensureSchema(c.env.DB);const row=await c.env.DB.prepare('SELECT object_key,original_name,content_type FROM governing_document_files WHERE document_id=?').bind(c.req.param('id')).first<any>();
     if(!row)return c.json({ok:false,error:'Styrdokumentets fil hittades inte.'},404);const object=await c.env.FILES.get(row.object_key);if(!object)return c.json({ok:false,error:'Filen saknas i lagringen.'},404);
