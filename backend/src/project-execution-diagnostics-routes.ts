@@ -8,12 +8,13 @@ async function tableExists(db:D1Database,table:string){
 export function registerProjectExecutionDiagnosticsRoutes(app:RouteApp){
   app.get('/api/project-execution-contexts-diagnostics',async c=>{
     let projectId=String(c.req.query('projectId')||'').trim();
+    const projectsResult=await c.env.DB.prepare('SELECT id,name,status FROM projects ORDER BY sort_order,name').all();
+    const projects=projectsResult.results as any[];
     if(!projectId){
-      const projects=await c.env.DB.prepare('SELECT id,name FROM projects ORDER BY sort_order,name').all();
-      if((projects.results as any[]).length===1){
-        projectId=String((projects.results as any[])[0].id);
+      if(projects.length===1){
+        projectId=String(projects[0].id);
       }else{
-        return c.json({ok:false,error:'projectId krävs när databasen innehåller flera projekt.',projects:projects.results},400);
+        return c.json({ok:false,error:'projectId krävs när databasen innehåller flera projekt.',projects},400);
       }
     }
 
@@ -101,6 +102,28 @@ export function registerProjectExecutionDiagnosticsRoutes(app:RouteApp){
       legacySample=rows.results as any[];
     }
 
+    const allProjects:any[]=[];
+    for(const project of projects){
+      let docs=0,items=0,legacyDocs=0,legacyPts=0;
+      if(hasDocs){
+        const row=await c.env.DB.prepare('SELECT COUNT(*) AS count FROM governing_documents WHERE project_id=?').bind(project.id).first<any>();
+        docs=Number(row?.count||0);
+      }
+      if(hasDocs&&hasItems){
+        const row=await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM governing_items i JOIN governing_documents d ON d.id=i.governing_document_id WHERE d.project_id=?`).bind(project.id).first<any>();
+        items=Number(row?.count||0);
+      }
+      if(hasLegacyDocs){
+        const row=await c.env.DB.prepare('SELECT COUNT(*) AS count FROM control_plan_documents WHERE project_id=?').bind(project.id).first<any>();
+        legacyDocs=Number(row?.count||0);
+      }
+      if(hasLegacyDocs&&hasLegacyPoints){
+        const row=await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM control_plan_points p JOIN control_plan_documents d ON d.id=p.control_plan_id WHERE d.project_id=?`).bind(project.id).first<any>();
+        legacyPts=Number(row?.count||0);
+      }
+      allProjects.push({id:project.id,name:project.name,status:project.status,governingDocuments:docs,governingItems:items,legacyDocuments:legacyDocs,legacyPoints:legacyPts});
+    }
+
     return c.json({
       ok:true,
       projectId,
@@ -124,7 +147,8 @@ export function registerProjectExecutionDiagnosticsRoutes(app:RouteApp){
         control_plan_points:hasLegacyPoints
       },
       sample,
-      legacySample
+      legacySample,
+      allProjects
     });
   });
 }
