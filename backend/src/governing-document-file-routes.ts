@@ -1,9 +1,14 @@
 type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void;post:(path:string,handler:(c:any)=>unknown)=>void;delete:(path:string,handler:(c:any)=>unknown)=>void};
 
+type AnalysisItem={code?:string;description?:string;sectionCode?:string;sectionTitle?:string;itemType?:string;responsibleRole?:string;evidenceRequired?:string;handlingStatus?:string;handlingComment?:string;sourceNote?:string};
+
 function clean(value:unknown){return typeof value==='string'?value.trim():''}
 function sanitizeFileName(name:string){const normalized=name.normalize('NFKD').replace(/[\u0300-\u036f]/g,'');const safe=normalized.replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/-+/g,'-').replace(/^[-.]+|[-.]+$/g,'');return safe.slice(0,120)||'styrdokument'}
 function isUploadedFile(value:unknown):value is File{return Boolean(value&&typeof value==='object'&&typeof (value as any).stream==='function'&&typeof (value as any).size==='number')}
 function normalizeDocumentType(value:unknown){const candidate=clean(value);return ['control_plan','authority_decision','building_permit','technical_consultation','work_environment','other'].includes(candidate)?candidate:'other'}
+function normalizeItemType(value:unknown){const candidate=clean(value);return ['control','visit','documentation','measurement','condition','information','administration','other'].includes(candidate)?candidate:'other'}
+function normalizeHandlingStatus(value:unknown){const candidate=clean(value);return ['unhandled','in_progress','handled','not_applicable','cannot_verify','alternative_evidence'].includes(candidate)?candidate:'unhandled'}
+async function addColumnIfMissing(db:D1Database,sql:string){try{await db.prepare(sql).run()}catch(error){const message=error instanceof Error?error.message:String(error);if(!message.toLowerCase().includes('duplicate column'))throw error}}
 
 async function ensureSchema(db:D1Database){
   await db.prepare(`CREATE TABLE IF NOT EXISTS governing_documents(
@@ -15,17 +20,26 @@ async function ensureSchema(db:D1Database){
     document_id TEXT PRIMARY KEY,project_id TEXT NOT NULL,object_key TEXT NOT NULL UNIQUE,original_name TEXT NOT NULL,
     content_type TEXT NOT NULL,size_bytes INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY(document_id) REFERENCES governing_documents(id) ON DELETE CASCADE,FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE)`).run();
+  await db.prepare(`CREATE TABLE IF NOT EXISTS governing_items(
+    id TEXT PRIMARY KEY,governing_document_id TEXT NOT NULL,code TEXT NOT NULL DEFAULT '',description TEXT NOT NULL,
+    section_code TEXT NOT NULL DEFAULT '',section_title TEXT NOT NULL DEFAULT '',item_type TEXT NOT NULL DEFAULT 'other',
+    responsible_role TEXT NOT NULL DEFAULT '',evidence_required TEXT NOT NULL DEFAULT '',handling_status TEXT NOT NULL DEFAULT 'unhandled',
+    handling_comment TEXT NOT NULL DEFAULT '',sort_order INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY(governing_document_id) REFERENCES governing_documents(id) ON DELETE CASCADE)`).run();
+  await addColumnIfMissing(db,"ALTER TABLE governing_items ADD COLUMN source_note TEXT NOT NULL DEFAULT ''");
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_governing_document_files_project ON governing_document_files(project_id)').run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_governing_items_document ON governing_items(governing_document_id,sort_order)').run();
 }
 
 export function registerGoverningDocumentFileRoutes(app:RouteApp){
   app.get('/api/studio/projects/:projectId/governing-document-files',async c=>{
     await ensureSchema(c.env.DB);const projectId=c.req.param('projectId');
     const rows=await c.env.DB.prepare(`SELECT d.id,d.document_type,d.title,d.issuer,d.reference,d.status,d.imported_at,
-      f.original_name,f.content_type,f.size_bytes
+      f.original_name,f.content_type,f.size_bytes,
+      (SELECT COUNT(*) FROM governing_items i WHERE i.governing_document_id=d.id) AS item_count
       FROM governing_documents d LEFT JOIN governing_document_files f ON f.document_id=d.id
       WHERE d.project_id=? ORDER BY CASE d.document_type WHEN 'control_plan' THEN 0 ELSE 1 END,d.imported_at DESC,d.title`).bind(projectId).all();
-    return c.json({ok:true,documents:(rows.results as any[]).map(row=>({...row,file:row.original_name?{originalName:row.original_name,contentType:row.content_type,sizeBytes:Number(row.size_bytes||0),url:`/api/governing-document-files/${encodeURIComponent(row.id)}`} : null}))});
+    return c.json({ok:true,documents:(rows.results as any[]).map(row=>({...row,item_count:Number(row.item_count||0),file:row.original_name?{originalName:row.original_name,contentType:row.content_type,sizeBytes:Number(row.size_bytes||0),url:`/api/governing-document-files/${encodeURIComponent(row.id)}`} : null}))});
   });
 
   app.post('/api/studio/governing-document-files/import',async c=>{
@@ -51,6 +65,30 @@ export function registerGoverningDocumentFileRoutes(app:RouteApp){
         VALUES(?,?,?,?,?,?)`).bind(documentId,projectId,objectKey,originalName,contentType,Number((upload as any).size||0)).run();
     }catch(error){await c.env.FILES.delete(objectKey).catch(()=>undefined);throw error}
     return c.json({ok:true,id:documentId,document:{id:documentId,title,documentType,issuer,file:{originalName,contentType,sizeBytes:Number((upload as any).size||0),url:`/api/governing-document-files/${documentId}`}}},201);
+  });
+
+  app.post('/api/studio/governing-documents/:id/analyze',async c=>{
+    await ensureSchema(c.env.DB);const id=c.req.param('id');
+    const document=await c.env.DB.prepare('SELECT id,project_id,title,document_type FROM governing_documents WHERE id=?').bind(id).first<any>();
+    if(!document)return c.json({ok:false,error:'Styrdokumentet hittades inte.'},404);
+    const body=await c.req.json<{items?:AnalysisItem[];analyzer?:string}>().catch(()=>({}));
+    const items=Array.isArray(body.items)?body.items:[];
+    if(!items.length)return c.json({ok:false,error:'Analysen innehåller inga styrande poster.'},400);
+    const count=await c.env.DB.prepare('SELECT COUNT(*) AS count FROM governing_items WHERE governing_document_id=?').bind(id).first<{count:number}>();
+    if(Number(count?.count||0)>0)return c.json({ok:false,error:'Dokumentet är redan analyserat. Granska eller kartlägg befintliga poster i stället.',existingItems:Number(count?.count||0)},409);
+    let created=0;
+    for(let index=0;index<items.length;index+=1){
+      const item=items[index];const description=clean(item.description);if(!description)continue;
+      await c.env.DB.prepare(`INSERT INTO governing_items(
+        id,governing_document_id,code,description,section_code,section_title,item_type,responsible_role,evidence_required,
+        handling_status,handling_comment,sort_order,source_note)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+          crypto.randomUUID(),id,clean(item.code),description,clean(item.sectionCode),clean(item.sectionTitle),normalizeItemType(item.itemType),
+          clean(item.responsibleRole),clean(item.evidenceRequired),normalizeHandlingStatus(item.handlingStatus),clean(item.handlingComment),(index+1)*10,clean(item.sourceNote)
+        ).run();created+=1;
+    }
+    await c.env.DB.prepare("UPDATE governing_documents SET status='active',updated_at=datetime('now') WHERE id=?").bind(id).run();
+    return c.json({ok:true,id,createdItems:created,analyzer:clean(body.analyzer)||'reviewed-structure'});
   });
 
   app.post('/api/studio/governing-documents/:id/prepare-linking',async c=>{
