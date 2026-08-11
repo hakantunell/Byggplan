@@ -2,12 +2,12 @@ import app from './studio-routes';
 import { registerControlPlanRoutes } from './control-plan-routes';
 import { registerGoverningDocumentRoutes } from './governing-document-routes';
 import { registerGoverningVerificationRoutesV2 } from './governing-verification-routes-v2';
-import { registerGoverningMappingRoutesV2 } from './governing-mapping-routes-v2';
+import { registerGoverningMappingRoutesV3 } from './governing-mapping-routes-v3';
 import { registerProjectDocumentRoutes } from './project-document-routes';
 import { registerProjectAdministrationRoutes } from './project-administration-routes';
 import { registerProjectManagementRoutes } from './project-management-routes';
 
-const IMPORT_RUNTIME_VERSION = '2026-08-11-v15';
+const IMPORT_RUNTIME_VERSION = '2026-08-11-v16';
 
 type ImportClassification = { category?: string; code?: string; label?: string; source?: string };
 type ImportActivity = { title?: string; description?: string; type?: string; classifications?: ImportClassification[] };
@@ -67,20 +67,20 @@ app.post('/api/studio/import-tree', async c => {
       const orderRow=await c.env.DB.prepare('SELECT COALESCE(MAX(sort_order),0)+10 AS next_order FROM work_areas WHERE project_id=?').bind(projectId).first<{next_order:number}>();
       workAreaId=crypto.randomUUID(); await c.env.DB.prepare('INSERT INTO work_areas(id,project_id,name,sort_order) VALUES(?,?,?,?)').bind(workAreaId,projectId,areaName,Number(orderRow?.next_order??10)).run(); createdArea=true;
     }
-    for(const section of sections){ const sectionName=clean(section.name); if(!sectionName)continue; sectionOrder+=10; const sectionId=crypto.randomUUID(); await c.env.DB.prepare('INSERT INTO work_sections(id,work_area_id,name,sort_order) VALUES(?,?,?,?)').bind(sectionId,workAreaId,sectionName,sectionOrder).run(); sectionCount+=1; let taskOrder=0;
+    for(const section of sections){ const sectionName=clean(section.name); if(!sectionName)continue; sectionOrder+=10; const sectionId=crypto.randomUUID(); await c.env.DB.prepare('INSERT INTO work_sections(id,work_area_id,name,sort_order) VALUES(?,?,?,?,?)').bind(sectionId,workAreaId,sectionName,sectionOrder).run(); sectionCount+=1; let taskOrder=0;
       for(const task of section.tasks??[]){ const taskTitle=clean(task.title); if(!taskTitle)continue; taskOrder+=10; const taskId=crypto.randomUUID(); await c.env.DB.prepare(`INSERT INTO tasks(id,work_section_id,section,title,description,status,sort_order,updated_at) VALUES(?,?,?,?,?,'todo',?,datetime('now'))`).bind(taskId,sectionId,sectionName,taskTitle,clean(task.description),taskOrder).run(); taskCount+=1; let activityOrder=0;
         for(const activity of task.activities??[]){ const activityTitle=clean(activity.title); if(!activityTitle)continue; activityOrder+=10; const activityId=crypto.randomUUID(); await c.env.DB.prepare(`INSERT INTO activities(id,task_id,title,description,activity_type,required,blocking,irreversible,sort_order) VALUES(?,?,?,?,?,1,0,0,?)`).bind(activityId,taskId,activityTitle,clean(activity.description),mapActivityType(activity.type),activityOrder).run(); activityCount+=1; await insertClassifications(c.env.DB,activityId,activity.classifications,'module'); classificationCount+=(activity.classifications??[]).filter(item=>mapClassificationCategory(item.category)&&clean(item.code)&&clean(item.label)).length; }
       }
     }
     if(!sectionCount){ if(createdArea)await c.env.DB.prepare('DELETE FROM work_areas WHERE id=?').bind(workAreaId).run(); return c.json({ok:false,error:'Importen innehåller inga giltiga arbetsavsnitt.',version:IMPORT_RUNTIME_VERSION},400); }
-  }catch(error){ console.error('Studio tree import failed',error); const databaseError=error instanceof Error?error.message:String(error); return c.json({ok:false,error:`Import v15: ${databaseError}`,progress:{sections:sectionCount,tasks:taskCount,activities:activityCount,classifications:classificationCount},version:IMPORT_RUNTIME_VERSION},500); }
+  }catch(error){ console.error('Studio tree import failed',error); const databaseError=error instanceof Error?error.message:String(error); return c.json({ok:false,error:`Import v16: ${databaseError}`,progress:{sections:sectionCount,tasks:taskCount,activities:activityCount,classifications:classificationCount},version:IMPORT_RUNTIME_VERSION},500); }
   return c.json({ok:true,version:IMPORT_RUNTIME_VERSION,workAreaId,created:{sections:sectionCount,tasks:taskCount,activities:activityCount,classifications:classificationCount}},201);
 });
 
 registerControlPlanRoutes(app as any);
 registerGoverningDocumentRoutes(app as any);
 registerGoverningVerificationRoutesV2(app as any);
-registerGoverningMappingRoutesV2(app as any);
+registerGoverningMappingRoutesV3(app as any);
 registerProjectDocumentRoutes(app as any);
 registerProjectAdministrationRoutes(app as any);
 registerProjectManagementRoutes(app as any);
