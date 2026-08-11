@@ -91,6 +91,21 @@ export function registerGoverningDocumentFileRoutes(app:RouteApp){
     return c.json({ok:true,id,createdItems:created,analyzer:clean(body.analyzer)||'reviewed-structure'});
   });
 
+  app.delete('/api/studio/governing-documents/:id/analysis',async c=>{
+    await ensureSchema(c.env.DB);const id=c.req.param('id');
+    const document=await c.env.DB.prepare('SELECT id FROM governing_documents WHERE id=?').bind(id).first();
+    if(!document)return c.json({ok:false,error:'Styrdokumentet hittades inte.'},404);
+    try{
+      const count=await c.env.DB.prepare('SELECT COUNT(*) AS count FROM governing_items WHERE governing_document_id=?').bind(id).first<{count:number}>();
+      await c.env.DB.prepare('DELETE FROM governing_items WHERE governing_document_id=?').bind(id).run();
+      await c.env.DB.prepare("UPDATE governing_documents SET status='active',updated_at=datetime('now') WHERE id=?").bind(id).run();
+      return c.json({ok:true,removedItems:Number(count?.count||0)});
+    }catch(error){
+      console.error('Reset governing analysis failed',error);
+      return c.json({ok:false,error:`Kunde inte nollställa analysen: ${error instanceof Error?error.message:String(error)}`},500);
+    }
+  });
+
   app.post('/api/studio/governing-documents/:id/prepare-linking',async c=>{
     await ensureSchema(c.env.DB);const id=c.req.param('id');const body=await c.req.json<{projectId?:string}>().catch(()=>({}));const projectId=clean(body.projectId);
     const row=await c.env.DB.prepare('SELECT id,project_id,status FROM governing_documents WHERE id=?').bind(id).first<any>();
