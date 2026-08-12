@@ -36,16 +36,39 @@ async function ensureSchema(db:D1Database){
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_activity_execution_context_context ON activity_execution_contexts(context)').run();
 }
 
+function externalExecutorSql(){
+  return `CASE
+    WHEN lower(a.title) LIKE 'beställ och genomför ka-besök%' THEN 'third_party'
+    WHEN lower(a.title) LIKE 'beställ och genomför byggnadsnämndens arbetsplatsbesök%' THEN 'third_party'
+    WHEN lower(a.title) LIKE 'beställ och genomför lägeskontroll%' THEN 'third_party'
+    WHEN lower(a.title) LIKE 'beställ och genomför sotarbesiktning%' THEN 'third_party'
+    WHEN lower(a.title) LIKE 'genomför sotarbesiktning%' THEN 'third_party'
+    WHEN lower(a.title) LIKE 'samordna och utför elinstallation%' THEN 'third_party'
+    ELSE 'self' END`;
+}
+
+function externalExecutorLabelSql(){
+  return `CASE
+    WHEN lower(a.title) LIKE 'beställ och genomför ka-besök%' THEN 'Kontrollansvarig'
+    WHEN lower(a.title) LIKE 'beställ och genomför byggnadsnämndens arbetsplatsbesök%' THEN 'Byggnadsnämnden'
+    WHEN lower(a.title) LIKE 'beställ och genomför lägeskontroll%' THEN 'Extern lägeskontroll'
+    WHEN lower(a.title) LIKE 'beställ och genomför sotarbesiktning%' OR lower(a.title) LIKE 'genomför sotarbesiktning%' THEN 'Sotare/skorstensfejare'
+    WHEN lower(a.title) LIKE 'samordna och utför elinstallation%' THEN 'Registrerat elinstallationsföretag'
+    ELSE NULL END`;
+}
+
 async function classifyProject(db:D1Database,projectId:string){
   const titlePlaceholders=ADMIN_TITLES.map(()=>'?').join(',');
   const params=[...ADMIN_TITLES,projectId];
   const hasContexts=await tableExists(db,'activity_contexts');
   const contextJoin=hasContexts?'LEFT JOIN activity_contexts ac ON ac.activity_id=a.id':'';
   const masterCase=hasContexts?"WHEN ac.surface='studio' THEN 'administrative' WHEN ac.surface='field' THEN 'field' ":'';
-  await db.prepare(`INSERT INTO activity_execution_contexts(activity_id,context,source,executor_type,updated_at)
+  const executorCase=externalExecutorSql();
+  const executorLabelCase=externalExecutorLabelSql();
+  await db.prepare(`INSERT INTO activity_execution_contexts(activity_id,context,source,executor_type,executor_label,updated_at)
     SELECT a.id,
       CASE ${masterCase}WHEN a.title IN (${titlePlaceholders}) OR wa.name='Slutkontroll och slutbesked' THEN 'administrative' ELSE 'field' END,
-      'system','self',datetime('now')
+      'system',${executorCase},${executorLabelCase},datetime('now')
     FROM activities a
     JOIN tasks t ON t.id=a.task_id
     JOIN work_sections ws ON ws.id=t.work_section_id
@@ -55,6 +78,8 @@ async function classifyProject(db:D1Database,projectId:string){
     ON CONFLICT(activity_id) DO UPDATE SET
       context=excluded.context,
       source='system',
+      executor_type=excluded.executor_type,
+      executor_label=excluded.executor_label,
       updated_at=datetime('now')
     WHERE activity_execution_contexts.source<>'manual'`).bind(...params).run();
 
