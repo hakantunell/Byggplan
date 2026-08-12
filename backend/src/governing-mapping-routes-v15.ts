@@ -25,8 +25,8 @@ function refineSemantics(item:any){
  if(/kontrollmätning|lägeskontroll/.test(t)){kinds=withDeadline(['control']);primary='control'}
  if(/elinstallationsföretaget registrerat/.test(t)){kinds=withDeadline(['control','administration']);primary='control'}
  if(/\bta\b.*\bbild\b|fotografera|fotodokumentation/.test(t)){
-   if(/skicka bilder|lämna.*foto|fotodokumentation.*skick/.test(t)){kinds=withDeadline(['administration','evidence']);primary='administration'}
-   else{kinds=withDeadline(['control','evidence']);primary='control'}
+  if(/skicka bilder|lämna.*foto|fotodokumentation.*skick/.test(t)){kinds=withDeadline(['administration','evidence']);primary='administration'}
+  else{kinds=withDeadline(['control','evidence']);primary='control'}
  }
  if(/översiktsbild/.test(t)){kinds=withDeadline(['control','evidence']);primary='control'}
  if(/sotare.*besiktigat/.test(t)){kinds=withDeadline(['control','administration']);primary='control'}
@@ -35,8 +35,19 @@ function refineSemantics(item:any){
  return{...item,handling_kind:primary,handling_kinds:unique(kinds)};
 }
 
+function conditionOnly(item:any){const t=norm(item.description);return /etablering, upplag och bodar ska rymmas inom den egna fastigheten/.test(t)}
+
 function exactTitlesFor(item:any):string[]{
  const t=norm(item.description);
+ if(/^arbetsmiljöplan upprättad$/.test(t))return['Kontrollera att arbetsmiljöorganisation och arbetsmiljöplan är ordnade'];
+ if(/arbetsmiljöplan ska upprättas och anslås före byggstart/.test(t))return['Kontrollera att arbetsmiljöorganisation och arbetsmiljöplan är ordnade'];
+ if(/bas-p och bas-u ska utses.*teoretiska och praktiska kunskaper/.test(t))return['Registrera BAS-P','Registrera BAS-U'];
+ if(/byggavfall ska förvaras.*sorteras.*eldning/.test(t))return['Ordna sortering och säker förvaring av byggavfall'];
+ if(/byggnadens bärande konstruktion ska beskrivas.*konstruktionsdokumentation/.test(t))return['Upprätta, samla och kontrollera konstruktionsdokumentation för bärande konstruktion'];
+ if(/rörinstallationer ska samordnas.*golvbrunn.*legionella/.test(t))return['Kontrollera golvbrunnar, blindledningar, varmvattentemperatur och legionellarisk'];
+ if(/takstolar.*takkonstruktion.*rundtimmer.*takåsar/.test(t))return['Montera åsar och sparrar enligt konstruktionshandling','Kontrollera upplag, infästning och stabilitet'];
+ if(/^brandskydd$/.test(t))return['Kontrollera att brandskyddsbeskrivningen beaktas i utförandet'];
+ if(/när åtgärderna är färdigställda.*slutsamråd kan bokas/.test(t))return['Beställ och genomför slutsamråd när det krävs'];
  if(/^besök vid slutsamråd$/.test(t))return['Beställ och genomför slutsamråd när det krävs'];
  if(/relationshandlingar för lod och utvändigt va/.test(t))return['Samla relationshandlingar för dagvatten och utvändigt VA'];
  if(/egenkontroller och intyg för el, va och brandskydd.*slutbesked/.test(t))return['Samla egenkontroller och intyg för installationer och brandskydd'];
@@ -45,9 +56,6 @@ function exactTitlesFor(item:any):string[]{
  if(/reducera totalfosfor.*70 procent.*organiska ämnen/.test(t))return['Verifiera att avloppslösningen uppfyller tillståndets reningskrav'];
  if(/risk för smitta, lukt eller annan olägenhet/.test(t))return['Kontrollera att avloppslösningen inte medför risk för smitta, lukt eller annan olägenhet'];
  if(/byggnadsarbetena får inte påbörjas innan startbesked/.test(t))return['Säkerställ att startbesked har erhållits före byggstart'];
- if(/arbetsmiljöplan ska upprättas och anslås före byggstart/.test(t))return['Kontrollera att arbetsmiljöorganisation och arbetsmiljöplan är ordnade','Sätt upp arbetsmiljöplan på arbetsplatsen före byggstart'];
- if(/bas-p och bas-u ska utses.*teoretiska och praktiska kunskaper/.test(t))return['Registrera BAS-P','Registrera BAS-U','Dokumentera att BAS-P och BAS-U har erforderlig kompetens för uppdraget'];
- if(/byggavfall ska förvaras.*sorteras.*eldning/.test(t))return['Ordna sortering och säker förvaring av byggavfall','Säkerställ att byggavfall inte eldas på fastigheten'];
  if(/ledningar och kablar i mark bör märkas ut före markarbeten/.test(t))return['Lokalisera och märk ut befintliga ledningar och kablar före schaktning'];
  if(/infart anläggs över samfällt dike/.test(t))return['Kontrollera dikesfunktion och dimensionera vägtrumma vid infart över dike'];
  if(/risker för skador på byggnad.*markarbeten/.test(t))return['Bedöm och förebygg skaderisker vid markarbeten'];
@@ -99,10 +107,10 @@ function exactTitlesFor(item:any):string[]{
 }
 
 function asSuggestion(a:any,confidence=98){return{activity_id:a.id,title:a.title,task_title:a.task_title,section_name:a.section_name,area_name:a.area_name,confidence,lifecycle_stage:a.lifecycle_stage,surface:a.surface,applicability:a.applicability,condition_text:a.condition_text}}
-
-function refineSuggestions(data:any,item:any,index:Map<string,any>){
+function refineSuggestions(data:any,item:any,index:Map<string,any>,activeIds:Set<string>){
+ if(conditionOnly(item))return[];
  const wanted=exactTitlesFor(item);if(wanted.length){const found=wanted.map(title=>index.get(norm(title))).filter(Boolean);if(found.length)return found.map((a:any)=>asSuggestion(a));}
- const current=Array.isArray(data.suggestions?.[item.id])?[...data.suggestions[item.id]]:[];const t=norm(item.description);
+ const current=(Array.isArray(data.suggestions?.[item.id])?[...data.suggestions[item.id]]:[]).filter((s:any)=>activeIds.has(String(s.activity_id)));const t=norm(item.description);
  const documentation=/intyg|protokoll|relationshandling|relationsritning|lämna in|skicka|samla|spara/.test(t);
  if(documentation){const docs=current.filter((s:any)=>/spara|samla|skicka|lämna|intyg|protokoll|relations|dokument/.test(norm(s.title)));if(docs.length)return docs;}
  return current;
@@ -113,8 +121,8 @@ export function registerGoverningMappingRoutesV15(app:RouteApp){
   get(path,handler){
    if(path!=='/api/studio/projects/:projectId/governing-mapping'){app.get(path,handler);return}
    app.get(path,async c=>{const response:any=await handler(c);if(!response||typeof response.clone!=='function'||!response.ok)return response;const data:any=await response.clone().json().catch(()=>null);if(!data||!Array.isArray(data.items))return response;
-    data.items=data.items.map((item:any)=>refineSemantics(item));const index=activityTitleIndex(data);
-    if(data.suggestions&&typeof data.suggestions==='object')for(const item of data.items)data.suggestions[item.id]=refineSuggestions(data,item,index);
+    data.activities=(Array.isArray(data.activities)?data.activities:[]).filter((a:any)=>String(a.applicability||'always')!=='deprecated');const activeIds=new Set<string>(data.activities.map((a:any)=>String(a.id)));data.items=data.items.map((item:any)=>refineSemantics(item));const index=activityTitleIndex(data);
+    if(data.suggestions&&typeof data.suggestions==='object')for(const item of data.items)data.suggestions[item.id]=refineSuggestions(data,item,index,activeIds);
     data.runtime='mapping-v16';return c.json(data,response.status)});
   },
   put(path,handler){app.put(path,async c=>{const response:any=await handler(c);if(!response||typeof response.clone!=='function'||!response.ok)return response;const data:any=await response.clone().json().catch(()=>null);if(!data)return response;data.runtime='mapping-v16';return c.json(data,response.status)})}
