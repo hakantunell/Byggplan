@@ -1,4 +1,8 @@
-type RouteApp = { post: (path: string, handler: (c: any) => unknown) => void; };
+type RouteApp = {
+  get: (path: string, handler: (c: any) => unknown) => void;
+  post: (path: string, handler: (c: any) => unknown) => void;
+  put: (path: string, handler: (c: any) => unknown) => void;
+};
 type CloneBody = { name?: string; propertyDesignation?: string; selectedModuleCodes?: string[]; deliveryMode?: string };
 const DELIVERY_MODES=['self_build','general_contractor','split_contract','undecided'] as const;
 function text(value: unknown) { return typeof value === 'string' ? value.trim() : ''; }
@@ -27,6 +31,18 @@ async function ensureSnapshotSchema(db: D1Database) {
 }
 
 export function registerMasterProjectCloneRoutes(app: RouteApp) {
+  app.get('/api/studio/projects/:projectId/context',async c=>{
+    await ensureSnapshotSchema(c.env.DB);const projectId=c.req.param('projectId');
+    const project=await c.env.DB.prepare('SELECT id FROM projects WHERE id=?').bind(projectId).first();if(!project)return c.json({ok:false,error:'Projektet hittades inte.'},404);
+    const row=await c.env.DB.prepare('SELECT delivery_mode FROM project_contexts WHERE project_id=?').bind(projectId).first<any>();
+    return c.json({ok:true,context:{deliveryMode:row?.delivery_mode||'undecided'}});
+  });
+  app.put('/api/studio/projects/:projectId/context',async c=>{
+    await ensureSnapshotSchema(c.env.DB);const projectId=c.req.param('projectId');const body=await c.req.json<Record<string,unknown>>().catch(()=>({}));
+    const project=await c.env.DB.prepare('SELECT id FROM projects WHERE id=?').bind(projectId).first();if(!project)return c.json({ok:false,error:'Projektet hittades inte.'},404);
+    const mode=deliveryMode(body.deliveryMode);await c.env.DB.prepare(`INSERT INTO project_contexts(project_id,delivery_mode,updated_at) VALUES(?,?,datetime('now')) ON CONFLICT(project_id) DO UPDATE SET delivery_mode=excluded.delivery_mode,updated_at=datetime('now')`).bind(projectId,mode).run();
+    return c.json({ok:true,context:{deliveryMode:mode}});
+  });
   app.post('/api/studio/master-projects/:masterProjectId/create-project', async c => {
     await ensureSnapshotSchema(c.env.DB);
     const masterProjectId = c.req.param('masterProjectId');
