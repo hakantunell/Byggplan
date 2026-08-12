@@ -33,6 +33,7 @@ async function extend(db:D1Database,masterId:string){await ensureSchema(db);let 
     'Sätt upp arbetsmiljöplan på arbetsplatsen före byggstart',
     'Dokumentera att BAS-P och BAS-U har erforderlig kompetens för uppdraget',
     'Ordna säker avfallshantering och sortering',
+    'Säkerställ att byggavfall inte eldas på fastigheten',
     'Upprätta eller samla konstruktionsdokumentation för bärande konstruktion',
     'Kontrollera att konstruktionsdokumentationen omfattar dimensioneringsförutsättningar och dimensioneringskontroll',
     'Kontrollera golvbrunnar, blindledningar och varmvattentemperatur',
