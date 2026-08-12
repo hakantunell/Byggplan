@@ -7,6 +7,7 @@ import { registerProjectSupportAttachmentUploadRoutes } from './project-support-
 import { registerProjectSupportRoutes } from './project-support-routes';
 import { registerProjectSupportJsonUploadRoutes } from './project-support-json-upload-routes';
 import { registerProjectExecutionContextRoutes } from './project-execution-context-routes';
+import { registerProjectFieldMetadataRoutes } from './project-field-metadata-routes';
 import { registerProjectExecutionDiagnosticsRoutes } from './project-execution-diagnostics-routes';
 import { registerProjectManagementRoutes } from './project-management-routes';
 import { registerProjectMasterDiagnosticsRoutes } from './project-master-diagnostics-routes';
@@ -34,6 +35,7 @@ registerProjectSupportAttachmentUploadRoutes(app as any);
 registerProjectSupportRoutes(app as any);
 registerProjectSupportJsonUploadRoutes(app as any);
 registerProjectExecutionContextRoutes(app as any);
+registerProjectFieldMetadataRoutes(app as any);
 registerProjectExecutionDiagnosticsRoutes(app as any);
 registerProjectManagementRoutes(app as any);
 registerProjectMasterDiagnosticsRoutes(app as any);
