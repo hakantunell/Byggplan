@@ -94,25 +94,7 @@ async function classifyProject(db:D1Database,projectId:string){
   )`).bind(projectId).run();
 }
 
-function words(value:unknown){
-  return String(value||'')
-    .toLocaleLowerCase('sv-SE')
-    .replace(/[^a-zåäö0-9 ]/g,' ')
-    .split(/\s+/)
-    .filter(word=>word.length>=4&&!['enligt','eller','samt','skall','ska','utförd','utföras','kontroll','kontrollera','dokumentation'].includes(word));
-}
-
-function similarity(item:any,activity:any){
-  const source=new Set(words(`${item.item_description} ${item.section_title||''} ${item.source_note||''}`));
-  const target=new Set(words(`${activity.title} ${activity.description||''} ${activity.task_title} ${activity.section_name} ${activity.area_name}`));
-  if(!source.size||!target.size)return 0;
-  let hits=0;
-  for(const word of source)if(target.has(word))hits+=1;
-  const ratio=hits/Math.max(2,Math.min(source.size,target.size));
-  return Math.min(96,Math.round(ratio*100));
-}
-
-function appendGoverningRow(byActivity:Map<string,any[]>,row:any,source:'explicit'|'classification'|'inferred'){
+function appendGoverningRow(byActivity:Map<string,any[]>,row:any,source:'explicit'|'classification'){
   const activityId=String(row.activity_id);
   const list=byActivity.get(activityId)||[];
   if(list.some(entry=>String(entry.itemId)===String(row.item_id)))return;
@@ -125,19 +107,19 @@ function appendGoverningRow(byActivity:Map<string,any[]>,row:any,source:'explici
     code:row.item_code,
     label:row.item_description,
     responsibleRole:row.responsible_role,
-    mappingSource:source,
-    confidence:row.confidence??null
+    mappingSource:source
   });
   byActivity.set(activityId,list);
 }
 
+// Mobile/runtime reads only persisted reviewed links and classifications.
+// Semantic inference belongs in Studio mapping/review, not in every field-app request.
 async function addGoverningMetadata(db:D1Database,projectId:string,items:any[]){
   if(!(await tableExists(db,'governing_documents')) || !(await tableExists(db,'governing_items'))){
     return items.map(item=>({...item,governing_documents:[]}));
   }
 
   const byActivity=new Map<string,any[]>();
-  const mappedItems=new Set<string>();
 
   if(await tableExists(db,'governing_item_activity_links')){
     const linked=await db.prepare(`SELECT l.activity_id,
@@ -152,11 +134,11 @@ async function addGoverningMetadata(db:D1Database,projectId:string,items:any[]){
       JOIN work_areas wa ON wa.id=ws.work_area_id
       WHERE wa.project_id=? AND d.status='active'
       ORDER BY l.activity_id,d.imported_at,i.sort_order`).bind(projectId).all();
-    for(const row of linked.results as any[]){appendGoverningRow(byActivity,row,'explicit');mappedItems.add(String(row.item_id));}
+    for(const row of linked.results as any[])appendGoverningRow(byActivity,row,'explicit');
   }
 
   if(await tableExists(db,'activity_classifications')){
-    const inferred=await db.prepare(`SELECT ac.activity_id,
+    const classified=await db.prepare(`SELECT ac.activity_id,
         d.id AS document_id,d.document_type,d.title AS document_title,d.issuer,
         i.id AS item_id,i.code AS item_code,i.description AS item_description,i.responsible_role
       FROM activity_classifications ac
@@ -174,39 +156,7 @@ async function addGoverningMetadata(db:D1Database,projectId:string,items:any[]){
           (ac.category='requirement' AND d.document_type<>'control_plan')
         )
       ORDER BY ac.activity_id,d.imported_at,i.sort_order`).bind(projectId).all();
-    for(const row of inferred.results as any[]){appendGoverningRow(byActivity,row,'classification');mappedItems.add(String(row.item_id));}
-  }
-
-  const governingRows=await db.prepare(`SELECT
-      d.id AS document_id,d.document_type,d.title AS document_title,d.issuer,
-      i.id AS item_id,i.code AS item_code,i.description AS item_description,
-      i.section_title,i.responsible_role,
-      COALESCE(i.source_note,'') AS source_note
-    FROM governing_items i
-    JOIN governing_documents d ON d.id=i.governing_document_id
-    WHERE d.project_id=? AND d.status='active'
-      AND COALESCE(i.handling_status,'unhandled') NOT IN ('not_applicable','cannot_verify','alternative_evidence')
-    ORDER BY d.imported_at,i.sort_order`).bind(projectId).all();
-
-  const activityRows=await db.prepare(`SELECT a.id AS activity_id,a.title,a.description,
-      t.title AS task_title,ws.name AS section_name,wa.name AS area_name
-    FROM activities a
-    JOIN tasks t ON t.id=a.task_id
-    JOIN work_sections ws ON ws.id=t.work_section_id
-    JOIN work_areas wa ON wa.id=ws.work_area_id
-    WHERE wa.project_id=?
-    ORDER BY wa.sort_order,ws.sort_order,t.sort_order,a.sort_order`).bind(projectId).all();
-
-  for(const governing of governingRows.results as any[]){
-    if(mappedItems.has(String(governing.item_id)))continue;
-    const ranked=(activityRows.results as any[])
-      .map(activity=>({activity,confidence:similarity(governing,activity)}))
-      .sort((a,b)=>b.confidence-a.confidence);
-    const best=ranked[0];
-    const second=ranked[1];
-    if(!best || best.confidence<50)continue;
-    if(second && best.confidence-second.confidence<15)continue;
-    appendGoverningRow(byActivity,{...governing,...best.activity,confidence:best.confidence},'inferred');
+    for(const row of classified.results as any[])appendGoverningRow(byActivity,row,'classification');
   }
 
   return items.map(item=>({
