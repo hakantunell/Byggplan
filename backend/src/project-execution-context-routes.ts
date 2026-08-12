@@ -113,7 +113,7 @@ function appendGoverningRow(byActivity:Map<string,any[]>,row:any,source:'explici
 }
 
 // Mobile/runtime reads only persisted reviewed links and classifications.
-// Semantic inference belongs in Studio mapping/review, not in every field-app request.
+// Optional metadata sources are isolated so one stale schema cannot break the whole field app.
 async function addGoverningMetadata(db:D1Database,projectId:string,items:any[]){
   if(!(await tableExists(db,'governing_documents')) || !(await tableExists(db,'governing_items'))){
     return items.map(item=>({...item,governing_documents:[]}));
@@ -122,41 +122,45 @@ async function addGoverningMetadata(db:D1Database,projectId:string,items:any[]){
   const byActivity=new Map<string,any[]>();
 
   if(await tableExists(db,'governing_item_activity_links')){
-    const linked=await db.prepare(`SELECT l.activity_id,
-        d.id AS document_id,d.document_type,d.title AS document_title,d.issuer,
-        i.id AS item_id,i.code AS item_code,i.description AS item_description,i.responsible_role
-      FROM governing_item_activity_links l
-      JOIN governing_items i ON i.id=l.governing_item_id
-      JOIN governing_documents d ON d.id=i.governing_document_id
-      JOIN activities a ON a.id=l.activity_id
-      JOIN tasks t ON t.id=a.task_id
-      JOIN work_sections ws ON ws.id=t.work_section_id
-      JOIN work_areas wa ON wa.id=ws.work_area_id
-      WHERE wa.project_id=? AND d.status='active'
-      ORDER BY l.activity_id,d.imported_at,i.sort_order`).bind(projectId).all();
-    for(const row of linked.results as any[])appendGoverningRow(byActivity,row,'explicit');
+    try{
+      const linked=await db.prepare(`SELECT l.activity_id,
+          d.id AS document_id,d.document_type,d.title AS document_title,d.issuer,
+          i.id AS item_id,i.code AS item_code,i.description AS item_description,i.responsible_role
+        FROM governing_item_activity_links l
+        JOIN governing_items i ON i.id=l.governing_item_id
+        JOIN governing_documents d ON d.id=i.governing_document_id
+        JOIN activities a ON a.id=l.activity_id
+        JOIN tasks t ON t.id=a.task_id
+        JOIN work_sections ws ON ws.id=t.work_section_id
+        JOIN work_areas wa ON wa.id=ws.work_area_id
+        WHERE wa.project_id=? AND d.status='active'
+        ORDER BY l.activity_id,d.imported_at,i.sort_order`).bind(projectId).all();
+      for(const row of linked.results as any[])appendGoverningRow(byActivity,row,'explicit');
+    }catch(error){console.warn('Could not read governing_item_activity_links for field metadata',String(error))}
   }
 
   if(await tableExists(db,'activity_classifications')){
-    const classified=await db.prepare(`SELECT ac.activity_id,
-        d.id AS document_id,d.document_type,d.title AS document_title,d.issuer,
-        i.id AS item_id,i.code AS item_code,i.description AS item_description,i.responsible_role
-      FROM activity_classifications ac
-      JOIN activities a ON a.id=ac.activity_id
-      JOIN tasks t ON t.id=a.task_id
-      JOIN work_sections ws ON ws.id=t.work_section_id
-      JOIN work_areas wa ON wa.id=ws.work_area_id
-      JOIN governing_documents d ON d.project_id=wa.project_id AND d.status='active'
-      JOIN governing_items i ON i.governing_document_id=d.id
-        AND lower(trim(i.code))=lower(trim(ac.code))
-      WHERE wa.project_id=?
-        AND trim(ac.code)<>''
-        AND (
-          (ac.category='control_plan' AND d.document_type='control_plan') OR
-          (ac.category='requirement' AND d.document_type<>'control_plan')
-        )
-      ORDER BY ac.activity_id,d.imported_at,i.sort_order`).bind(projectId).all();
-    for(const row of classified.results as any[])appendGoverningRow(byActivity,row,'classification');
+    try{
+      const classified=await db.prepare(`SELECT ac.activity_id,
+          d.id AS document_id,d.document_type,d.title AS document_title,d.issuer,
+          i.id AS item_id,i.code AS item_code,i.description AS item_description,i.responsible_role
+        FROM activity_classifications ac
+        JOIN activities a ON a.id=ac.activity_id
+        JOIN tasks t ON t.id=a.task_id
+        JOIN work_sections ws ON ws.id=t.work_section_id
+        JOIN work_areas wa ON wa.id=ws.work_area_id
+        JOIN governing_documents d ON d.project_id=wa.project_id AND d.status='active'
+        JOIN governing_items i ON i.governing_document_id=d.id
+          AND lower(trim(i.code))=lower(trim(ac.code))
+        WHERE wa.project_id=?
+          AND trim(ac.code)<>''
+          AND (
+            (ac.category='control_plan' AND d.document_type='control_plan') OR
+            (ac.category='requirement' AND d.document_type<>'control_plan')
+          )
+        ORDER BY ac.activity_id,d.imported_at,i.sort_order`).bind(projectId).all();
+      for(const row of classified.results as any[])appendGoverningRow(byActivity,row,'classification');
+    }catch(error){console.warn('Could not read activity_classifications for field metadata',String(error))}
   }
 
   return items.map(item=>({
