@@ -1,1 +1,1 @@
-export { registerGoverningMappingRoutesV11 as registerGoverningMappingRoutesV3 } from './governing-mapping-routes-v11';
+export { registerGoverningMappingRoutesV12 as registerGoverningMappingRoutesV3 } from './governing-mapping-routes-v12';
