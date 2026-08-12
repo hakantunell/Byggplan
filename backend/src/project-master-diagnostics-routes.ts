@@ -1,4 +1,4 @@
-import { ensureMasterV15 } from './master-project-v2-upgrade-routes-v15';
+import { ensureMasterV16 } from './master-project-v2-upgrade-routes-v16';
 
 type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void};
 
@@ -16,7 +16,7 @@ export function registerProjectMasterDiagnosticsRoutes(app:RouteApp){
     if(String(snapshotBase.master_project_code)==='fritidshus-v2'){
       let master=await c.env.DB.prepare('SELECT id,version FROM master_projects WHERE id=?').bind(snapshotBase.master_project_id).first<any>();
       if(!master)master=await c.env.DB.prepare("SELECT id,version FROM master_projects WHERE code='fritidshus-v2'").first<any>();
-      if(master&&Number(master.version||0)<15)await ensureMasterV15(c.env.DB,String(master.id));
+      if(master&&Number(master.version||0)<16)await ensureMasterV16(c.env.DB,String(master.id));
     }
 
     const snapshot=await c.env.DB.prepare(`SELECT s.master_project_id,s.master_project_code,s.master_project_version,s.created_at,m.name master_project_name,m.version current_master_version
@@ -42,7 +42,8 @@ export function registerProjectMasterDiagnosticsRoutes(app:RouteApp){
       'Kontrollera att fuktsäkerhetsprojektering har beaktats i projekteringen','Samla ifylld och signerad kontrollplan',
       'Samla egenkontroller och intyg för installationer och brandskydd','Samla ventilationsintyg för slutbesked',
       'Bevaka avloppstillståndets start- och färdigställandefrister','Dokumentera sakkunskap hos den person som utför avloppsinstallationen',
-      'Fotografera varje installerad brunn','Fotografera ledningar före återfyllning','Fuktskydda material och konstruktion under byggtid'
+      'Fotografera varje installerad brunn','Fotografera ledningar före återfyllning','Fuktskydda material och konstruktion under byggtid',
+      'Kontrollera faktiska markförhållanden vid schaktning'
     ];
     const placeholders=canonicalTitles.map(()=>'?').join(',');
     const present=await c.env.DB.prepare(`SELECT a.title FROM activities a JOIN tasks t ON t.id=a.task_id JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id LEFT JOIN activity_contexts ac ON ac.activity_id=a.id WHERE wa.project_id=? AND COALESCE(ac.applicability,'always')<>'deprecated' AND a.title IN (${placeholders})`).bind(projectId,...canonicalTitles).all();
