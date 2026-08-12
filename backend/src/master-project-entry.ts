@@ -2,7 +2,7 @@ import app from './studio-import-entry';
 import { registerMasterProjectRoutes } from './master-project-routes';
 import { registerMasterProjectCloneRoutes } from './master-project-clone-routes';
 import { registerMasterProjectModuleRoutes } from './master-project-module-routes';
-import { registerMasterProjectV2UpgradeRoutes } from './master-project-v2-upgrade-routes';
+import { registerMasterProjectV2UpgradeRoutesV10 } from './master-project-v2-upgrade-routes-v10';
 import { registerProjectSupportAttachmentUploadRoutes } from './project-support-attachment-upload-routes';
 import { registerProjectSupportRoutes } from './project-support-routes';
 import { registerProjectSupportJsonUploadRoutes } from './project-support-json-upload-routes';
@@ -13,7 +13,7 @@ import { registerGoverningDocumentFileRoutes } from './governing-document-file-r
 
 registerMasterProjectRoutes(app as any);
 registerMasterProjectModuleRoutes(app as any);
-registerMasterProjectV2UpgradeRoutes(app as any);
+registerMasterProjectV2UpgradeRoutesV10(app as any);
 registerMasterProjectCloneRoutes(app as any);
 registerProjectSupportAttachmentUploadRoutes(app as any);
 registerProjectSupportRoutes(app as any);
