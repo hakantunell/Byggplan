@@ -1,3 +1,5 @@
+import { ensureMasterV13 } from './master-project-v2-upgrade-routes-v13';
+
 type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void};
 
 async function tableExists(db:D1Database,name:string){return Boolean(await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").bind(name).first())}
@@ -8,6 +10,14 @@ export function registerProjectMasterDiagnosticsRoutes(app:RouteApp){
     const project=await c.env.DB.prepare('SELECT id,name FROM projects WHERE id=?').bind(projectId).first<any>();
     if(!project)return c.json({ok:false,error:'Projektet hittades inte.'},404);
     if(!await tableExists(c.env.DB,'project_master_snapshots'))return c.json({ok:true,diagnostics:{hasSnapshot:false,projectId,projectName:String(project.name||'')}});
+
+    const snapshotBase=await c.env.DB.prepare('SELECT master_project_id,master_project_code FROM project_master_snapshots WHERE project_id=?').bind(projectId).first<any>();
+    if(!snapshotBase)return c.json({ok:true,diagnostics:{hasSnapshot:false,projectId,projectName:String(project.name||'')}});
+    if(String(snapshotBase.master_project_code)==='fritidshus-v2'){
+      let master=await c.env.DB.prepare('SELECT id,version FROM master_projects WHERE id=?').bind(snapshotBase.master_project_id).first<any>();
+      if(!master)master=await c.env.DB.prepare("SELECT id,version FROM master_projects WHERE code='fritidshus-v2'").first<any>();
+      if(master&&Number(master.version||0)<13)await ensureMasterV13(c.env.DB,String(master.id));
+    }
 
     const snapshot=await c.env.DB.prepare(`SELECT s.master_project_id,s.master_project_code,s.master_project_version,s.created_at,m.name master_project_name,m.version current_master_version
       FROM project_master_snapshots s LEFT JOIN master_projects m ON m.id=s.master_project_id WHERE s.project_id=?`).bind(projectId).first<any>();
