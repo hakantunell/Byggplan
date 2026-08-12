@@ -10,6 +10,7 @@ import { registerProjectExecutionContextRoutes } from './project-execution-conte
 import { registerProjectExecutionDiagnosticsRoutes } from './project-execution-diagnostics-routes';
 import { registerProjectManagementRoutes } from './project-management-routes';
 import { registerProjectMasterDiagnosticsRoutes } from './project-master-diagnostics-routes';
+import { registerProjectMasterRepairRoutes } from './project-master-repair-routes';
 import { registerGoverningDocumentFileRoutes } from './governing-document-file-routes';
 
 const MASTER_V2_TARGET_VERSION=12;
@@ -33,6 +34,7 @@ registerProjectExecutionContextRoutes(app as any);
 registerProjectExecutionDiagnosticsRoutes(app as any);
 registerProjectManagementRoutes(app as any);
 registerProjectMasterDiagnosticsRoutes(app as any);
+registerProjectMasterRepairRoutes(app as any);
 registerGoverningDocumentFileRoutes(app as any);
 
 export default app;
