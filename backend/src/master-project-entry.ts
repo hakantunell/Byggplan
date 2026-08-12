@@ -11,6 +11,7 @@ import { registerProjectExecutionDiagnosticsRoutes } from './project-execution-d
 import { registerProjectManagementRoutes } from './project-management-routes';
 import { registerProjectMasterDiagnosticsRoutes } from './project-master-diagnostics-routes';
 import { registerProjectMasterRepairRoutes } from './project-master-repair-routes';
+import { registerProjectConditionRoutes } from './project-condition-routes';
 import { registerGoverningDocumentFileRoutes } from './governing-document-file-routes';
 
 const MASTER_V2_TARGET_VERSION=14;
@@ -37,6 +38,7 @@ registerProjectExecutionDiagnosticsRoutes(app as any);
 registerProjectManagementRoutes(app as any);
 registerProjectMasterDiagnosticsRoutes(app as any);
 registerProjectMasterRepairRoutes(app as any);
+registerProjectConditionRoutes(app as any);
 registerGoverningDocumentFileRoutes(app as any);
 
 export default app;
