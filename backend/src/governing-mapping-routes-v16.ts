@@ -5,6 +5,7 @@ type RequirementKind='work'|'control'|'administration'|'condition'|'operation'|'
 function norm(v:unknown){return String(v||'').toLocaleLowerCase('sv-SE').replace(/[–—]/g,'-').replace(/\s+/g,' ').trim()}
 function unique<T>(xs:T[]){return [...new Set(xs)]}
 function asSuggestion(a:any,confidence=98){return{activity_id:a.id,title:a.title,task_title:a.task_title,section_name:a.section_name,area_name:a.area_name,confidence,lifecycle_stage:a.lifecycle_stage,surface:a.surface,applicability:a.applicability,condition_text:a.condition_text}}
+function activityTitleIndex(data:any){const m=new Map<string,any>();for(const a of Array.isArray(data.activities)?data.activities:[]){const key=norm(a.title);if(key&&!m.has(key))m.set(key,a)}return m}
 
 function refineSemantics(item:any){
  const t=norm(item.description);let kinds=(Array.isArray(item.handling_kinds)?[...item.handling_kinds]:[item.handling_kind||'work']) as RequirementKind[];let primary=(item.handling_kind||'work') as RequirementKind;const deadline=kinds.includes('deadline');const withDeadline=(base:RequirementKind[])=>unique(deadline?[...base,'deadline']:base);
@@ -49,11 +50,11 @@ function exactTitlesFor(item:any):string[]{
  return[];
 }
 
-function refineSuggestions(data:any,item:any){const wanted=exactTitlesFor(item);if(!wanted.length)return Array.isArray(data.suggestions?.[item.id])?data.suggestions[item.id]:[];const found=wanted.map(title=>(data.activities||[]).find((a:any)=>norm(a.title)===norm(title))).filter(Boolean);return found.length?found.map((a:any)=>asSuggestion(a)):Array.isArray(data.suggestions?.[item.id])?data.suggestions[item.id]:[]}
+function refineSuggestions(data:any,item:any,index:Map<string,any>){const wanted=exactTitlesFor(item);if(!wanted.length)return Array.isArray(data.suggestions?.[item.id])?data.suggestions[item.id]:[];const found=wanted.map(title=>index.get(norm(title))).filter(Boolean);return found.length?found.map((a:any)=>asSuggestion(a)):Array.isArray(data.suggestions?.[item.id])?data.suggestions[item.id]:[]}
 
 export function registerGoverningMappingRoutesV16(app:RouteApp){
  const proxy:RouteApp={
-  get(path,handler){if(path!=='/api/studio/projects/:projectId/governing-mapping'){app.get(path,handler);return}app.get(path,async c=>{const response:any=await handler(c);if(!response||typeof response.clone!=='function'||!response.ok)return response;const data:any=await response.clone().json().catch(()=>null);if(!data||!Array.isArray(data.items))return response;data.items=data.items.map((item:any)=>refineSemantics(item));if(data.suggestions&&typeof data.suggestions==='object')for(const item of data.items)data.suggestions[item.id]=refineSuggestions(data,item);data.runtime='mapping-v16';return c.json(data,response.status)})},
+  get(path,handler){if(path!=='/api/studio/projects/:projectId/governing-mapping'){app.get(path,handler);return}app.get(path,async c=>{const response:any=await handler(c);if(!response||typeof response.clone!=='function'||!response.ok)return response;const data:any=await response.clone().json().catch(()=>null);if(!data||!Array.isArray(data.items))return response;data.items=data.items.map((item:any)=>refineSemantics(item));const index=activityTitleIndex(data);if(data.suggestions&&typeof data.suggestions==='object')for(const item of data.items)data.suggestions[item.id]=refineSuggestions(data,item,index);data.runtime='mapping-v16';return c.json(data,response.status)})},
   put(path,handler){app.put(path,async c=>{const response:any=await handler(c);if(!response||typeof response.clone!=='function'||!response.ok)return response;const data:any=await response.clone().json().catch(()=>null);if(!data)return response;data.runtime='mapping-v16';return c.json(data,response.status)})}
  };
  registerGoverningMappingRoutesV15(proxy);
