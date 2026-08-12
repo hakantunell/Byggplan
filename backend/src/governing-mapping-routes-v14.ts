@@ -13,15 +13,23 @@ function classify(text:string,itemType=''){
  const photo=/\b(ta|tag) (en )?bild\b|\bfotografera\b|\bfotodokumentera\b|\böversiktsbild\b/.test(t);
  const deadline=/inom \d+ år|inom \d+ (dag|vecka|månad)|före byggstart|före startbesked|innan startbesked|före gjutning|före övertäckning|innan .*läggs igen|före slutbesked|till slutbesked|snarast efter|så snart|i god tid|två veckor i förväg/.test(t);
  const operation=/slamtöm|skötsel|skötas|underhåll|drift|överlämn.*ny ägare|ägarbyte|hållas fri från växtlighet/.test(t);
- const administration=itemType==='administration'||itemType==='documentation'||/\b(lämna in|lämnas|skicka|skickas|samla|spara|registrera|boka|beställ|upprätta|upprättas|relationshandling|relationsritning|intyg|protokoll|rapport)\b/.test(t);
- const control=itemType==='measurement'||itemType==='visit'||itemType==='control'||/\b(kontrollera|kontroll|verifiera|verifier|mäta|mätning|besiktiga|besiktig|prova|provning|bedöma|bedömning|överensstämmelse|registrerat hos|sakkunnig|fackmannamässig)\b/.test(t);
- const work=/\b(utför|utföra|utföras|montera|installera|installation|anlägga|anläggas|förbereda|förberedelse|ordna|bygga|grundläggning|täckning|ventilation|eldstad|imkanal)\b/.test(t);
- const condition=itemType==='condition'||itemType==='information'||/får inte|ska vara|ska bestå|ska hållas|endast|där .*förekommer|om .*påträffas|om .*behöver|enligt .*handling|risk för/.test(t);
+ const administration=itemType==='administration'||itemType==='documentation'||/\b(lämna in|lämnas|skicka|skickas|samla|spara|registrera|registrerat hos|boka|beställ|upprätta|upprättas|relationshandling|relationsritning|intyg|protokoll|rapport|slutsamråd)\b/.test(t);
+ const control=itemType==='measurement'||itemType==='visit'||itemType==='control'||/\b(kontrollera|kontroll|verifiera|verifier|mäta|mätning|besiktiga|besiktig|prova|provning|bedöma|bedömning|överensstämmelse|registrerat hos|sakkunnig|fackmannamässig|utsättning|utstakning|markrisk)\b/.test(t);
+ const work=/\b(utför|utföra|utföras|montera|installera|installation|anlägga|anläggas|förbereda|förberedelse|ordna|bygga|grundläggning|täckning|ventilation|eldstad|imkanal|utsättning|utstakning|markplanering|brandvarnare|brandsläckare|brandfilt|spistimer)\b/.test(t)||/lokalisera.*ledningar|märk.*ledningar|ledningar.*kablar.*före schakt/.test(t);
+ const condition=itemType==='condition'||itemType==='information'||/får inte|ska vara|ska bestå|ska hållas|endast|där .*förekommer|om .*påträffas|om .*behöver|enligt .*handling|risk för|markrisk|dubbla ångtäta|ångtäta skikt|marknivå.*tomtgräns/.test(t);
  if(operation)add(kinds,'operation');if(work)add(kinds,'work');if(control)add(kinds,'control');if(administration)add(kinds,'administration');if(condition)add(kinds,'condition');if(photo){add(kinds,'control');add(kinds,'evidence');remove(kinds,'work');if(!/skicka|lämna|rapport/.test(t))remove(kinds,'administration')}if(deadline)add(kinds,'deadline');
+ if(/utsättning|utstakning/.test(t)){add(kinds,'work');add(kinds,'control')}
+ if(/markplanering/.test(t)){add(kinds,'work');add(kinds,'control');add(kinds,'condition')}
+ if(/lokalisera.*ledningar|märk.*ledningar|ledningar.*kablar.*före schakt/.test(t)){add(kinds,'work');add(kinds,'control')}
+ if(/markrisk|risker.*mark|risker.*schakt|förebygg.*skad/.test(t)){add(kinds,'control');add(kinds,'condition')}
+ if(/dubbla ångtäta|ångtäta skikt/.test(t)){add(kinds,'control');add(kinds,'condition');remove(kinds,'work')}
+ if(/brandvarnare|brandsläckare|brandfilt|spistimer/.test(t)){add(kinds,'work');add(kinds,'control')}
  if(!kinds.length)add(kinds,'work');
  let primary:RequirementKind='work';
  if(photo)primary='control';
  else if(/^\s*(lämna in|lämnas|skicka|skickas|samla|spara|registrera|boka|beställ|upprätta|upprättas)\b/.test(t)||/\b(intyg|protokoll|relationshandling|relationsritning)\b/.test(t))primary='administration';
+ else if(/slutsamråd/.test(t))primary='control';
+ else if(/utsättning|utstakning/.test(t))primary='work';
  else if(/^\s*(kontrollera|verifiera|mäta|besiktiga|prova|bedöma)\b/.test(t)||itemType==='visit'||/\bbesök\b/.test(t))primary='control';
  else if(/^\s*(utför|montera|installera|anlägga|förbereda|ordna|bygga)\b/.test(t))primary='work';
  else if(operation)primary='operation';
