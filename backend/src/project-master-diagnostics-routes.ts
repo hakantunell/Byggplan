@@ -1,4 +1,4 @@
-import { ensureMasterV14 } from './master-project-v2-upgrade-routes-v14';
+import { ensureMasterV15 } from './master-project-v2-upgrade-routes-v15';
 
 type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void};
 
@@ -16,7 +16,7 @@ export function registerProjectMasterDiagnosticsRoutes(app:RouteApp){
     if(String(snapshotBase.master_project_code)==='fritidshus-v2'){
       let master=await c.env.DB.prepare('SELECT id,version FROM master_projects WHERE id=?').bind(snapshotBase.master_project_id).first<any>();
       if(!master)master=await c.env.DB.prepare("SELECT id,version FROM master_projects WHERE code='fritidshus-v2'").first<any>();
-      if(master&&Number(master.version||0)<14)await ensureMasterV14(c.env.DB,String(master.id));
+      if(master&&Number(master.version||0)<15)await ensureMasterV15(c.env.DB,String(master.id));
     }
 
     const snapshot=await c.env.DB.prepare(`SELECT s.master_project_id,s.master_project_code,s.master_project_version,s.created_at,m.name master_project_name,m.version current_master_version
