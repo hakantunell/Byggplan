@@ -1,6 +1,6 @@
 type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void;put:(path:string,handler:(c:any)=>unknown)=>void};
 
-// Known-good field icon metadata implementation. Keep this read path stable while deployment is verified.
+// Fallback for legacy activities without activity_contexts metadata.
 const ADMIN_TITLES=[
   'Kontrollera att startbesked finns',
   'Registrera BAS-P',
@@ -8,7 +8,10 @@ const ADMIN_TITLES=[
   'Genomför startmöte med byggherre och KA',
   'Sätt upp arbetsmiljöplan där det krävs',
   'Kontrollera att elinstallationsföretaget är registrerat',
-  'Registrera behörighet eller redovisa vald våtrumsmetod'
+  'Registrera behörighet eller redovisa vald våtrumsmetod',
+  'Säkerställ att erforderlig geoteknisk utredning finns',
+  'Kontrollera radonförutsättningar och eventuell radonklass',
+  'Kontrollera geotekniskt underlag och markförhållanden'
 ];
 
 async function safeAlter(db:D1Database,sql:string){try{await db.prepare(sql).run()}catch(error){const message=String(error);if(!message.includes('duplicate column name'))throw error}}
@@ -36,14 +39,18 @@ async function ensureSchema(db:D1Database){
 async function classifyProject(db:D1Database,projectId:string){
   const titlePlaceholders=ADMIN_TITLES.map(()=>'?').join(',');
   const params=[...ADMIN_TITLES,projectId];
+  const hasContexts=await tableExists(db,'activity_contexts');
+  const contextJoin=hasContexts?'LEFT JOIN activity_contexts ac ON ac.activity_id=a.id':'';
+  const masterCase=hasContexts?"WHEN ac.surface='studio' THEN 'administrative' WHEN ac.surface='field' THEN 'field' ":'';
   await db.prepare(`INSERT INTO activity_execution_contexts(activity_id,context,source,executor_type,updated_at)
     SELECT a.id,
-      CASE WHEN a.title IN (${titlePlaceholders}) OR wa.name='Slutkontroll och slutbesked' THEN 'administrative' ELSE 'field' END,
+      CASE ${masterCase}WHEN a.title IN (${titlePlaceholders}) OR wa.name='Slutkontroll och slutbesked' THEN 'administrative' ELSE 'field' END,
       'system','self',datetime('now')
     FROM activities a
     JOIN tasks t ON t.id=a.task_id
     JOIN work_sections ws ON ws.id=t.work_section_id
     JOIN work_areas wa ON wa.id=ws.work_area_id
+    ${contextJoin}
     WHERE wa.project_id=?
     ON CONFLICT(activity_id) DO UPDATE SET
       context=excluded.context,
