@@ -11,10 +11,12 @@ import { registerProjectExecutionDiagnosticsRoutes } from './project-execution-d
 import { registerProjectManagementRoutes } from './project-management-routes';
 import { registerGoverningDocumentFileRoutes } from './governing-document-file-routes';
 
+const MASTER_V2_TARGET_VERSION=11;
+
 app.use('/api/studio/master-projects*', async (c:any,next:any)=>{
   if(c.req.method==='GET'){
     const master=await c.env.DB.prepare("SELECT id,version FROM master_projects WHERE code='fritidshus-v2'").first<any>();
-    if(master&&Number(master.version||0)<11)await ensureMasterV11(c.env.DB,String(master.id));
+    if(master&&Number(master.version||0)<MASTER_V2_TARGET_VERSION)await ensureMasterV11(c.env.DB,String(master.id));
   }
   await next();
 });
