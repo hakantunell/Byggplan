@@ -3,8 +3,8 @@ function norm(v:unknown){return String(v||'').toLocaleLowerCase('sv-SE').replace
 function isProjectCondition(row:any){
   const type=String(row.item_type||'').toLowerCase(),t=norm(row.description);
   if(type==='condition')return true;
-  if(type==='information'&&/får inte|ska |bör |endast|om /.test(t))return true;
-  return /får inte|ska vara|ska bestå|ska hållas|ska rymmas|ska placeras|ska förväntas|marknivå.*tomtgräns|risk för smitta|dubbla ångtäta|ångtäta skikt|om .*påträffas|om .*behöver tas i anspråk|om infart .* dike/.test(t);
+  if(type==='information'&&/får inte|inte tillåten|ska |bör |endast|om /.test(t))return true;
+  return /får inte|inte tillåten|ska vara|ska bestå|ska hållas|ska rymmas|ska placeras|ska förväntas|marknivå.*tomtgräns|risk för smitta|dubbla ångtäta|ångtäta skikt|om .*påträffas|om .*behöver tas i anspråk|om infart .* dike/.test(t);
 }
 export function registerProjectConditionRoutes(app:RouteApp){
   app.get('/api/studio/projects/:projectId/project-conditions',async c=>{
