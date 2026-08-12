@@ -9,6 +9,7 @@ import { registerProjectSupportJsonUploadRoutes } from './project-support-json-u
 import { registerProjectExecutionContextRoutes } from './project-execution-context-routes';
 import { registerProjectExecutionDiagnosticsRoutes } from './project-execution-diagnostics-routes';
 import { registerProjectManagementRoutes } from './project-management-routes';
+import { registerProjectMasterDiagnosticsRoutes } from './project-master-diagnostics-routes';
 import { registerGoverningDocumentFileRoutes } from './governing-document-file-routes';
 
 const MASTER_V2_TARGET_VERSION=11;
@@ -31,6 +32,7 @@ registerProjectSupportJsonUploadRoutes(app as any);
 registerProjectExecutionContextRoutes(app as any);
 registerProjectExecutionDiagnosticsRoutes(app as any);
 registerProjectManagementRoutes(app as any);
+registerProjectMasterDiagnosticsRoutes(app as any);
 registerGoverningDocumentFileRoutes(app as any);
 
 export default app;
