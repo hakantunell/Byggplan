@@ -1,6 +1,8 @@
 type RouteApp = { post: (path: string, handler: (c: any) => unknown) => void; };
-type CloneBody = { name?: string; propertyDesignation?: string; selectedModuleCodes?: string[] };
+type CloneBody = { name?: string; propertyDesignation?: string; selectedModuleCodes?: string[]; deliveryMode?: string };
+const DELIVERY_MODES=['self_build','general_contractor','split_contract','undecided'] as const;
 function text(value: unknown) { return typeof value === 'string' ? value.trim() : ''; }
+function deliveryMode(value: unknown){const candidate=text(value);return DELIVERY_MODES.includes(candidate as any)?candidate:'undecided'}
 
 async function ensureSnapshotSchema(db: D1Database) {
   await db.prepare(`CREATE TABLE IF NOT EXISTS project_master_snapshots (
@@ -15,6 +17,12 @@ async function ensureSnapshotSchema(db: D1Database) {
   await db.prepare(`CREATE TABLE IF NOT EXISTS project_master_module_selections (
     project_id TEXT NOT NULL,module_code TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY(project_id,module_code),FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE)`).run();
+  await db.prepare(`CREATE TABLE IF NOT EXISTS project_contexts (
+    project_id TEXT PRIMARY KEY,
+    delivery_mode TEXT NOT NULL DEFAULT 'undecided',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE)`).run();
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_project_master_node_links_project ON project_master_node_links(project_id,entity_type)').run();
 }
 
@@ -23,7 +31,7 @@ export function registerMasterProjectCloneRoutes(app: RouteApp) {
     await ensureSnapshotSchema(c.env.DB);
     const masterProjectId = c.req.param('masterProjectId');
     const body = await c.req.json<CloneBody>().catch(() => ({}));
-    const name = text(body.name); const propertyDesignation = text(body.propertyDesignation);
+    const name = text(body.name); const propertyDesignation = text(body.propertyDesignation); const mode=deliveryMode(body.deliveryMode);
     const requestedCodes=[...new Set((body.selectedModuleCodes||[]).map(text).filter(Boolean))];
     if (!name) return c.json({ ok:false, error:'Projektnamn krävs.' }, 400);
     const master = await c.env.DB.prepare('SELECT id,code,name,version,status FROM master_projects WHERE id=?').bind(masterProjectId).first<any>();
@@ -58,12 +66,13 @@ export function registerMasterProjectCloneRoutes(app: RouteApp) {
     try{
       await c.env.DB.prepare(`INSERT INTO projects(id,name,property_designation,status,sort_order,created_at,updated_at) VALUES(?,?,?,'active',?,datetime('now'),datetime('now'))`).bind(projectId,name,propertyDesignation||null,Number(order?.next_order??10)).run();
       await c.env.DB.prepare(`INSERT INTO project_master_snapshots(project_id,master_project_id,master_project_code,master_project_version) VALUES(?,?,?,?)`).bind(projectId,master.id,master.code,Number(master.version)).run();
+      await c.env.DB.prepare(`INSERT INTO project_contexts(project_id,delivery_mode) VALUES(?,?)`).bind(projectId,mode).run();
       for(const code of selectedCodes)await c.env.DB.prepare('INSERT INTO project_master_module_selections(project_id,module_code) VALUES(?,?)').bind(projectId,code).run();
       for(const source of areas){const id=crypto.randomUUID();areaMap.set(source.id,id);await c.env.DB.prepare(`INSERT INTO work_areas(id,project_id,name,description,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,'todo',?,datetime('now'),datetime('now'))`).bind(id,projectId,source.name,source.number?`Masterkod ${source.number}`:null,Number(source.sort_order)).run();await c.env.DB.prepare(`INSERT INTO project_master_node_links(id,project_id,entity_type,entity_id,master_entity_id) VALUES(?,?,'work_area',?,?)`).bind(crypto.randomUUID(),projectId,id,source.id).run();}
       for(const source of sections){const parentId=areaMap.get(source.master_work_area_id);if(!parentId)continue;const id=crypto.randomUUID();sectionMap.set(source.id,id);await c.env.DB.prepare(`INSERT INTO work_sections(id,work_area_id,name,description,status,sort_order,created_at,updated_at) VALUES(?,?,?,?,'todo',?,datetime('now'),datetime('now'))`).bind(id,parentId,source.name,source.number?`Masterkod ${source.number}`:null,Number(source.sort_order)).run();await c.env.DB.prepare(`INSERT INTO project_master_node_links(id,project_id,entity_type,entity_id,master_entity_id) VALUES(?,?,'work_section',?,?)`).bind(crypto.randomUUID(),projectId,id,source.id).run();}
       for(const source of tasks){const parentId=sectionMap.get(source.master_work_section_id);if(!parentId)continue;const section=sections.find(i=>i.id===source.master_work_section_id);const id=crypto.randomUUID();taskMap.set(source.id,id);await c.env.DB.prepare(`INSERT INTO tasks(id,work_section_id,section,title,description,status,sort_order,updated_at) VALUES(?,?,?,?,?,'todo',?,datetime('now'))`).bind(id,parentId,section?.name||'',source.title,source.description||'',Number(source.sort_order)).run();await c.env.DB.prepare(`INSERT INTO project_master_node_links(id,project_id,entity_type,entity_id,master_entity_id) VALUES(?,?,'task',?,?)`).bind(crypto.randomUUID(),projectId,id,source.id).run();}
       for(const source of activities){const parentId=taskMap.get(source.master_task_id);if(!parentId)continue;const id=crypto.randomUUID();await c.env.DB.prepare(`INSERT INTO activities(id,task_id,title,description,activity_type,required,blocking,irreversible,sort_order) VALUES(?,?,?,?,?,?,0,0,?)`).bind(id,parentId,source.title,source.description||'',source.activity_type,Number(source.required??1),Number(source.sort_order)).run();await c.env.DB.prepare(`INSERT INTO project_master_node_links(id,project_id,entity_type,entity_id,master_entity_id) VALUES(?,?,'activity',?,?)`).bind(crypto.randomUUID(),projectId,id,source.id).run();}
     }catch(error){await c.env.DB.prepare('DELETE FROM projects WHERE id=?').bind(projectId).run().catch(()=>undefined);console.error('Master project clone failed',error);return c.json({ok:false,error:error instanceof Error?error.message:'Projektet kunde inte skapas.'},500)}
-    return c.json({ok:true,project:{id:projectId,name,propertyDesignation:propertyDesignation||null,status:'active'},snapshot:{masterProjectId:master.id,code:master.code,version:Number(master.version),selectedModuleCodes:[...selectedCodes]},created:{areas:areas.length,sections:sections.length,tasks:tasks.length,activities:activities.length}},201);
+    return c.json({ok:true,project:{id:projectId,name,propertyDesignation:propertyDesignation||null,status:'active',deliveryMode:mode},snapshot:{masterProjectId:master.id,code:master.code,version:Number(master.version),selectedModuleCodes:[...selectedCodes]},created:{areas:areas.length,sections:sections.length,tasks:tasks.length,activities:activities.length}},201);
   });
 }
