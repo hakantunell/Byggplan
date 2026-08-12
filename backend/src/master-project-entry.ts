@@ -2,7 +2,7 @@ import app from './studio-import-entry';
 import { registerMasterProjectRoutes } from './master-project-routes';
 import { registerMasterProjectCloneRoutes } from './master-project-clone-routes';
 import { registerMasterProjectModuleRoutes } from './master-project-module-routes';
-import { ensureMasterV10, registerMasterProjectV2UpgradeRoutesV10 } from './master-project-v2-upgrade-routes-v10';
+import { ensureMasterV11, registerMasterProjectV2UpgradeRoutesV11 } from './master-project-v2-upgrade-routes-v11';
 import { registerProjectSupportAttachmentUploadRoutes } from './project-support-attachment-upload-routes';
 import { registerProjectSupportRoutes } from './project-support-routes';
 import { registerProjectSupportJsonUploadRoutes } from './project-support-json-upload-routes';
@@ -14,14 +14,14 @@ import { registerGoverningDocumentFileRoutes } from './governing-document-file-r
 app.use('/api/studio/master-projects*', async (c:any,next:any)=>{
   if(c.req.method==='GET'){
     const master=await c.env.DB.prepare("SELECT id,version FROM master_projects WHERE code='fritidshus-v2'").first<any>();
-    if(master&&Number(master.version||0)<10)await ensureMasterV10(c.env.DB,String(master.id));
+    if(master&&Number(master.version||0)<11)await ensureMasterV11(c.env.DB,String(master.id));
   }
   await next();
 });
 
 registerMasterProjectRoutes(app as any);
 registerMasterProjectModuleRoutes(app as any);
-registerMasterProjectV2UpgradeRoutesV10(app as any);
+registerMasterProjectV2UpgradeRoutesV11(app as any);
 registerMasterProjectCloneRoutes(app as any);
 registerProjectSupportAttachmentUploadRoutes(app as any);
 registerProjectSupportRoutes(app as any);
