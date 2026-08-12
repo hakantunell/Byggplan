@@ -23,6 +23,7 @@ async function deprecate(db:D1Database,masterId:string,title:string){
 }
 
 async function extend(db:D1Database,masterId:string){await ensureSchema(db);let created=0;
+  created+=await addToTask(db,masterId,'Förbered byggstart',{title:'Kontrollera att aktuella projekthandlingar finns tillgängliga',type:'check',description:'Kontrollera före byggstart att aktuella ritningar, beslut och övriga projekthandlingar som behövs för det kommande arbetet finns tillgängliga. Startbesked kontrolleras i en separat specifik aktivitet.'});
   created+=await addToTask(db,masterId,'Dokumentera bärande konstruktion',{title:'Upprätta, samla och kontrollera konstruktionsdokumentation för bärande konstruktion',type:'administration',lifecycle:'design',surface:'studio',description:'Samla eller upprätta konstruktionsdokumentationen och kontrollera i samma moment att den omfattar funktion, dimensioneringsförutsättningar, tillämpliga regelverk, relevanta exponerings- och korrosivitetsklasser samt dimensioneringskontroll.'});
   created+=await addToTask(db,masterId,'Kontrollera VVS-utformning och funktion',{title:'Kontrollera golvbrunnar, blindledningar, varmvattentemperatur och legionellarisk',type:'check',description:'Kontrollera i ett sammanhållet moment att erforderliga golvbrunnar finns, att blindledningar undviks och att varmvattentemperatur och övrig utformning inte medför legionellarisk.'});
 
