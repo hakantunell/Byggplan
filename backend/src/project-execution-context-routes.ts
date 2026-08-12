@@ -94,6 +94,11 @@ async function classifyProject(db:D1Database,projectId:string){
   )`).bind(projectId).run();
 }
 
+function isSelfRole(value:unknown){
+  const role=String(value??'').trim().toLocaleLowerCase('sv-SE');
+  return role==='' || role==='ek' || role==='egenkontroll' || role.includes('egenkontroll') || role==='byggherre' || role.includes('byggherr');
+}
+
 function words(value:unknown){
   return String(value||'')
     .toLocaleLowerCase('sv-SE')
@@ -209,10 +214,23 @@ async function addGoverningMetadata(db:D1Database,projectId:string,items:any[]){
     appendGoverningRow(byActivity,{...governing,...best.activity,confidence:best.confidence},'inferred');
   }
 
-  return items.map(item=>({
-    ...item,
-    governing_documents:byActivity.get(String(item.activity_id))||[]
-  }));
+  return items.map(item=>{
+    const governingDocuments=byActivity.get(String(item.activity_id))||[];
+    if(item.source==='manual' || item.executor_type==='third_party' || String(item.activity_type)==='perform'){
+      return {...item,governing_documents:governingDocuments};
+    }
+
+    const externalRoles=[...new Set(governingDocuments
+      .map((entry:any)=>String(entry.responsibleRole??'').trim())
+      .filter((role:string)=>role&&!isSelfRole(role)))];
+
+    return {
+      ...item,
+      executor_type:externalRoles.length?'third_party':item.executor_type,
+      executor_label:externalRoles.length?externalRoles.join(' / '):item.executor_label,
+      governing_documents:governingDocuments
+    };
+  });
 }
 
 export function registerProjectExecutionContextRoutes(app:RouteApp){
