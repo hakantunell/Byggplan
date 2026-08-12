@@ -2,10 +2,12 @@ import { registerGoverningMappingRoutesV14 } from './governing-mapping-routes-v1
 
 type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void;put:(path:string,handler:(c:any)=>unknown)=>void};
 type RequirementKind='work'|'control'|'administration'|'condition'|'operation'|'evidence'|'deadline';
+const EXCEPTIONS=new Set(['not_applicable','cannot_verify','alternative_evidence']);
 
 function norm(v:unknown){return String(v||'').toLocaleLowerCase('sv-SE').replace(/[–—]/g,'-').replace(/\s+/g,' ').trim()}
 function unique<T>(xs:T[]){return [...new Set(xs)]}
 function activityTitleIndex(data:any){const m=new Map<string,any>();for(const a of Array.isArray(data.activities)?data.activities:[]){const key=norm(a.title);if(key&&!m.has(key))m.set(key,a)}return m}
+function conditionOnly(item:any){const t=norm(item.description);return /etablering, upplag och bodar ska rymmas inom den egna fastigheten/.test(t)}
 
 function refineSemantics(item:any){
  const t=norm(item.description);let kinds=(Array.isArray(item.handling_kinds)?[...item.handling_kinds]:[item.handling_kind||'work']) as RequirementKind[];let primary=(item.handling_kind||'work') as RequirementKind;
@@ -32,10 +34,15 @@ function refineSemantics(item:any){
  if(/sotare.*besiktigat/.test(t)){kinds=withDeadline(['control','administration']);primary='control'}
  if(/godkänt protokoll.*lämnas för slutbesked/.test(t)){kinds=withDeadline(['administration']);primary='administration'}
  if(/relationsritningar.*lämnas för slutbesked/.test(t)){kinds=withDeadline(['administration']);primary='administration'}
- return{...item,handling_kind:primary,handling_kinds:unique(kinds)};
+ if(conditionOnly(item)){kinds=withDeadline(['condition']);primary='condition'}
+ else if(kinds.includes('condition')){
+  const without=kinds.filter(k=>k!=='condition');
+  const substantive=without.filter(k=>k!=='deadline');
+  if(substantive.length){kinds=unique(without);if(primary==='condition')primary=substantive[0]}
+  else{kinds=withDeadline(['control']);primary='control'}
+ }
+ return{...item,handling_kind:primary,handling_kinds:unique(kinds),project_condition:conditionOnly(item)};
 }
-
-function conditionOnly(item:any){const t=norm(item.description);return /etablering, upplag och bodar ska rymmas inom den egna fastigheten/.test(t)}
 
 function exactTitlesFor(item:any):string[]{
  const t=norm(item.description);
@@ -115,6 +122,20 @@ function refineSuggestions(data:any,item:any,index:Map<string,any>,activeIds:Set
  if(documentation){const docs=current.filter((s:any)=>/spara|samla|skicka|lämna|intyg|protokoll|relations|dokument/.test(norm(s.title)));if(docs.length)return docs;}
  return current;
 }
+function recalcCoverage(data:any){
+ const items=Array.isArray(data.items)?data.items:[],documents=Array.isArray(data.documents)?data.documents:[];
+ for(const document of documents){
+  const rows=items.filter((item:any)=>String(item.governing_document_id)===String(document.id));
+  const exceptionCount=rows.filter((item:any)=>EXCEPTIONS.has(String(item.handling_status||''))).length;
+  const projectConditionCount=rows.filter((item:any)=>item.project_condition&&String(item.handling_status||'')==='handled').length;
+  const mappedCount=rows.filter((item:any)=>!EXCEPTIONS.has(String(item.handling_status||''))&&!(item.project_condition&&String(item.handling_status||'')==='handled')&&Number(item.mapped_activity_count||0)>0).length;
+  const uncoveredCount=rows.filter((item:any)=>!EXCEPTIONS.has(String(item.handling_status||''))&&!(item.project_condition&&String(item.handling_status||'')==='handled')&&Number(item.mapped_activity_count||0)===0).length;
+  const coveredCount=mappedCount+exceptionCount+projectConditionCount;
+  Object.assign(document,{item_count:rows.length,mapped_count:mappedCount,exception_count:exceptionCount,project_condition_count:projectConditionCount,uncovered_count:uncoveredCount,covered_count:coveredCount,coverage_percent:rows.length?Math.round(coveredCount*100/rows.length):100});
+ }
+ const itemCount=documents.reduce((s:number,d:any)=>s+Number(d.item_count||0),0),mappedCount=documents.reduce((s:number,d:any)=>s+Number(d.mapped_count||0),0),exceptionCount=documents.reduce((s:number,d:any)=>s+Number(d.exception_count||0),0),projectConditionCount=documents.reduce((s:number,d:any)=>s+Number(d.project_condition_count||0),0),uncoveredCount=documents.reduce((s:number,d:any)=>s+Number(d.uncovered_count||0),0),coveredCount=mappedCount+exceptionCount+projectConditionCount;
+ data.summary={...(data.summary||{}),item_count:itemCount,mapped_count:mappedCount,exception_count:exceptionCount,project_condition_count:projectConditionCount,covered_count:coveredCount,uncovered_count:uncoveredCount,coverage_percent:itemCount?Math.round(coveredCount*100/itemCount):100};
+}
 
 export function registerGoverningMappingRoutesV15(app:RouteApp){
  const proxy:RouteApp={
@@ -123,9 +144,9 @@ export function registerGoverningMappingRoutesV15(app:RouteApp){
    app.get(path,async c=>{const response:any=await handler(c);if(!response||typeof response.clone!=='function'||!response.ok)return response;const data:any=await response.clone().json().catch(()=>null);if(!data||!Array.isArray(data.items))return response;
     data.activities=(Array.isArray(data.activities)?data.activities:[]).filter((a:any)=>String(a.applicability||'always')!=='deprecated');const activeIds=new Set<string>(data.activities.map((a:any)=>String(a.id)));data.items=data.items.map((item:any)=>refineSemantics(item));const index=activityTitleIndex(data);
     if(data.suggestions&&typeof data.suggestions==='object')for(const item of data.items)data.suggestions[item.id]=refineSuggestions(data,item,index,activeIds);
-    data.runtime='mapping-v16';return c.json(data,response.status)});
+    recalcCoverage(data);data.runtime='mapping-v17';return c.json(data,response.status)});
   },
-  put(path,handler){app.put(path,async c=>{const response:any=await handler(c);if(!response||typeof response.clone!=='function'||!response.ok)return response;const data:any=await response.clone().json().catch(()=>null);if(!data)return response;data.runtime='mapping-v16';return c.json(data,response.status)})}
+  put(path,handler){app.put(path,async c=>{const response:any=await handler(c);if(!response||typeof response.clone!=='function'||!response.ok)return response;const data:any=await response.clone().json().catch(()=>null);if(!data)return response;data.runtime='mapping-v17';return c.json(data,response.status)})}
  };
  registerGoverningMappingRoutesV14(proxy);
 }
