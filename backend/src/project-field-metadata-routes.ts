@@ -67,8 +67,9 @@ export function registerProjectFieldMetadataRoutes(app:RouteApp){
     if(hasLinks&&hasItems&&hasDocuments){
       const links=await c.env.DB.prepare(`SELECT
           l.activity_id,
-          d.id AS document_id,d.document_type,d.title AS document_title,d.issuer,
-          i.id AS item_id,i.code AS item_code,i.description AS item_description,i.responsible_role
+          d.id AS document_id,d.document_type,d.title AS document_title,d.issuer,d.reference,
+          i.id AS item_id,i.code AS item_code,i.description AS item_description,
+          i.section_code,i.section_title,i.item_type,i.responsible_role,i.evidence_required
         FROM governing_item_activity_links l
         JOIN governing_items i ON i.id=l.governing_item_id
         JOIN governing_documents d ON d.id=i.governing_document_id
@@ -87,10 +88,15 @@ export function registerProjectFieldMetadataRoutes(app:RouteApp){
           documentType:row.document_type,
           documentTitle:row.document_title,
           issuer:row.issuer,
+          reference:row.reference,
           itemId:row.item_id,
           code:row.item_code,
           label:row.item_description,
+          sectionCode:row.section_code,
+          sectionTitle:row.section_title,
+          itemType:row.item_type,
           responsibleRole:row.responsible_role,
+          evidenceRequired:row.evidence_required,
           mappingSource:'explicit'
         });
 
