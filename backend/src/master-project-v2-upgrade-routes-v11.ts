@@ -1,4 +1,4 @@
-import { registerMasterProjectV2UpgradeRoutesV10 } from './master-project-v2-upgrade-routes-v10';
+import { ensureMasterV10, registerMasterProjectV2UpgradeRoutesV10 } from './master-project-v2-upgrade-routes-v10';
 
 type RouteApp={post:(path:string,handler:(c:any)=>unknown)=>void};
 type Seed={title:string;type:string;lifecycle?:string;surface?:string;applicability?:string;condition?:string;description?:string};
@@ -22,5 +22,5 @@ async function extend(db:D1Database,masterId:string){await ensureSchema(db);let 
  await db.prepare("UPDATE master_projects SET version=CASE WHEN version<11 THEN 11 ELSE version END,updated_at=datetime('now') WHERE id=?").bind(masterId).run();return created;
 }
 
-export async function ensureMasterV11(db:D1Database,masterId:string){return extend(db,masterId)}
+export async function ensureMasterV11(db:D1Database,masterId:string){const previous=await ensureMasterV10(db,masterId);return previous+await extend(db,masterId)}
 export function registerMasterProjectV2UpgradeRoutesV11(app:RouteApp){const proxy:RouteApp={post(path,handler){if(path!=='/api/studio/master-projects/upgrade-fritidshus-v2'){app.post(path,handler);return}app.post(path,async c=>{const response:any=await handler(c);if(!response||typeof response.clone!=='function'||!response.ok)return response;const data:any=await response.clone().json().catch(()=>null);if(!data?.id)return response;const created=await extend(c.env.DB,String(data.id));return c.json({...data,version:11,createdActivities:Number(data.createdActivities||0)+created},response.status)})}};registerMasterProjectV2UpgradeRoutesV10(proxy)}
