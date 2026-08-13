@@ -5,6 +5,47 @@ type RouteApp={
   put:(path:string,handler:(c:any)=>unknown)=>void;
 };
 
+function semanticKinds(item:any){
+  const values=Array.isArray(item?.handling_kinds)&&item.handling_kinds.length
+    ? item.handling_kinds
+    : [item?.handling_kind||'work'];
+  return new Set(values.map((value:unknown)=>String(value)));
+}
+
+function suggestionIsCompatible(item:any,activity:any){
+  if(!activity)return false;
+  const kinds=semanticKinds(item);
+  const activityType=String(activity.activity_type||'');
+
+  // An execution activity is valid only when the governing item actually contains
+  // a work/action requirement. A pure control item must therefore never be proposed
+  // against a perform activity, regardless of wording in a new control plan.
+  if(activityType==='perform')return kinds.has('work');
+
+  // Checks and measurements are suitable for control semantics.
+  if(activityType==='check'||activityType==='measurement')return kinds.has('control');
+
+  // Documentation activities may carry administration/evidence requirements and
+  // can also document a control when the governing item explicitly asks for it.
+  if(activityType==='document')return kinds.has('administration')||kinds.has('evidence')||kinds.has('control');
+
+  // Other activity types are left to the semantic matcher; the important hard
+  // boundary is that pure controls cannot leak into field execution cards.
+  return true;
+}
+
+function filterSuggestionsBySemantics(data:any){
+  if(!data||!Array.isArray(data.items)||!Array.isArray(data.activities)||!data.suggestions)return data;
+  const activityById=new Map<string,any>(data.activities.map((activity:any)=>[String(activity.id),activity]));
+  for(const item of data.items){
+    const suggestions=Array.isArray(data.suggestions[item.id])?data.suggestions[item.id]:[];
+    data.suggestions[item.id]=suggestions.filter((suggestion:any)=>
+      suggestionIsCompatible(item,activityById.get(String(suggestion.activity_id)))
+    );
+  }
+  return data;
+}
+
 async function repairWindowControlMapping(db:D1Database,projectId:string){
   const item=await db.prepare(`
     SELECT i.id
@@ -47,16 +88,6 @@ async function repairWindowControlMapping(db:D1Database,projectId:string){
   `).bind(crypto.randomUUID(),String(item.id),String(target.id)).run();
 }
 
-async function isInvalidControlToPerform(db:D1Database,itemId:string,activityId:string){
-  const row=await db.prepare(`
-    SELECT i.item_type,a.activity_type
-    FROM governing_items i
-    JOIN activities a ON a.id=?
-    WHERE i.id=?
-  `).bind(activityId,itemId).first<any>();
-  return row?.item_type==='control'&&row?.activity_type==='perform';
-}
-
 export function registerGoverningMappingRoutesV16(app:RouteApp){
   const proxy:RouteApp={
     get(path,handler){
@@ -66,25 +97,19 @@ export function registerGoverningMappingRoutesV16(app:RouteApp){
       }
       app.get(path,async c=>{
         await repairWindowControlMapping(c.env.DB,String(c.req.param('projectId')));
-        return handler(c);
+        const response:any=await handler(c);
+        if(!response||typeof response.clone!=='function'||!response.ok)return response;
+        const data:any=await response.clone().json().catch(()=>null);
+        if(!data)return response;
+        filterSuggestionsBySemantics(data);
+        return c.json(data,response.status);
       });
     },
     put(path,handler){
-      if(path!=='/api/studio/governing-items/:itemId/mappings/:activityId'){
-        app.put(path,handler);
-        return;
-      }
-      app.put(path,async c=>{
-        const itemId=String(c.req.param('itemId'));
-        const activityId=String(c.req.param('activityId'));
-        if(await isInvalidControlToPerform(c.env.DB,itemId,activityId)){
-          return c.json({
-            ok:false,
-            error:'En kontrollpunkt i ett styrdokument ska kopplas till en kontrollaktivitet, inte till en UTFÖR-aktivitet.'
-          },409);
-        }
-        return handler(c);
-      });
+      // Mapping suggestions are filtered semantically on GET. Keep PUT available for
+      // explicit/manual project decisions rather than rejecting them from raw item_type,
+      // because mixed work+control requirements are legitimate.
+      app.put(path,handler);
     }
   };
   registerGoverningMappingRoutesV15(proxy);
