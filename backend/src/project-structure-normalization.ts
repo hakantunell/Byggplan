@@ -6,6 +6,13 @@ async function deprecateActivity(db:D1Database,activityId:string,reason:string){
   await db.prepare(`INSERT INTO activity_contexts(activity_id,lifecycle_stage,surface,applicability,condition_text,updated_at) VALUES(?,'build','field','deprecated',?,datetime('now')) ON CONFLICT(activity_id) DO UPDATE SET applicability='deprecated',condition_text=excluded.condition_text,updated_at=datetime('now')`).bind(activityId,reason).run();
 }
 
+async function preferSpecificTimberActivity(db:D1Database,projectId:string){
+  const specific=await db.prepare(`SELECT a.id FROM activities a JOIN tasks t ON t.id=a.task_id JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id WHERE wa.project_id=? AND lower(trim(ws.name))=lower('Stomme') AND lower(trim(a.title))=lower('Res timmerstomme enligt konstruktionshandling') LIMIT 1`).bind(projectId).first<any>();
+  if(!specific)return;
+  const generic=await db.prepare(`SELECT a.id FROM activities a JOIN tasks t ON t.id=a.task_id JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id WHERE wa.project_id=? AND lower(trim(ws.name))=lower('Stomme') AND lower(trim(a.title))=lower('Res vald bärande stomme')`).bind(projectId).all();
+  for(const row of generic.results as any[])await deprecateActivity(db,String(row.id),'Ersatt i timmerprojekt av "Res timmerstomme enligt konstruktionshandling".');
+}
+
 async function mergeFramingTasks(db:D1Database,projectId:string){
   const preferred=await db.prepare(`SELECT t.id FROM tasks t JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id WHERE wa.project_id=? AND lower(trim(ws.name))=lower('Stomme') AND lower(trim(t.title))=lower('Res bärande stomme') ORDER BY t.sort_order LIMIT 1`).bind(projectId).first<any>();
   const source=await db.prepare(`SELECT t.id FROM tasks t JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id WHERE wa.project_id=? AND lower(trim(ws.name))=lower('Stomme') AND lower(trim(t.title))=lower('Utför timmerstomme') ORDER BY t.sort_order LIMIT 1`).bind(projectId).first<any>();
@@ -40,4 +47,5 @@ export async function normalizeProjectStructure(db:D1Database,projectId:string){
   }
 
   await mergeFramingTasks(db,projectId);
+  await preferSpecificTimberActivity(db,projectId);
 }
