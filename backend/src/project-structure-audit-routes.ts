@@ -1,117 +1,28 @@
 type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void};
 
 type NodeKind='work_area'|'work_section'|'task'|'activity';
-type AuditIssue={
-  severity:'info'|'warning';
-  kind:string;
-  message:string;
-  nodeIds:string[];
-  paths:string[];
-};
+type AuditIssue={severity:'info'|'warning';kind:string;message:string;nodeIds:string[];paths:string[]};
+function clean(value:unknown){return String(value??'').trim()}
+function norm(value:unknown){return clean(value).toLocaleLowerCase('sv-SE').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9åäö]+/g,' ').replace(/\b(och|samt|en|ett|den|det|de|av|for|mot|enligt|vid|i|pa|på|med|till)\b/g,' ').replace(/\s+/g,' ').trim()}
+function words(value:unknown){return new Set(norm(value).split(' ').filter(word=>word.length>2))}
+function similarity(a:unknown,b:unknown){const left=words(a),right=words(b);if(!left.size||!right.size)return 0;let shared=0;for(const word of left)if(right.has(word))shared++;return shared/Math.max(left.size,right.size)}
+async function tableExists(db:D1Database,name:string){return Boolean(await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").bind(name).first())}
+function addDuplicateIssues(items:any[],kind:NodeKind,pathFor:(item:any)=>string,issues:AuditIssue[]){const groups=new Map<string,any[]>();for(const item of items){const key=norm(item.title??item.name);if(!key)continue;const list=groups.get(key)||[];list.push(item);groups.set(key,list)}for(const list of groups.values())if(list.length>1)issues.push({severity:'warning',kind:`duplicate_${kind}`,message:`Flera ${kind==='activity'?'aktiviteter':kind==='task'?'moment':kind==='work_section'?'arbetsavsnitt':'arbetsområden'} har samma normaliserade namn.`,nodeIds:list.map(x=>String(x.id)),paths:list.map(pathFor)})}
+function addSimilarActivityIssues(activities:any[],pathFor:(item:any)=>string,issues:AuditIssue[]){const bySection=new Map<string,any[]>();for(const activity of activities){const key=String(activity.work_section_id||'');const list=bySection.get(key)||[];list.push(activity);bySection.set(key,list)}for(const list of bySection.values())for(let i=0;i<list.length;i++)for(let j=i+1;j<list.length;j++){const a=list[i],b=list[j];if(norm(a.title)===norm(b.title))continue;const score=similarity(a.title,b.title);if(score<0.72)continue;issues.push({severity:'info',kind:'similar_activities',message:`Aktiviteterna liknar varandra semantiskt (${Math.round(score*100)}%). Kontrollera om de överlappar.`,nodeIds:[String(a.id),String(b.id)],paths:[pathFor(a),pathFor(b)]})}}
 
-function clean(value:unknown){return String(value??'').trim();}
-function norm(value:unknown){
-  return clean(value)
-    .toLocaleLowerCase('sv-SE')
-    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-    .replace(/[^a-z0-9åäö]+/g,' ')
-    .replace(/\b(och|samt|en|ett|den|det|de|av|for|mot|enligt|vid|i|pa|på|med|till)\b/g,' ')
-    .replace(/\s+/g,' ').trim();
-}
-function words(value:unknown){return new Set(norm(value).split(' ').filter(word=>word.length>2));}
-function similarity(a:unknown,b:unknown){
-  const left=words(a),right=words(b);if(!left.size||!right.size)return 0;
-  let shared=0;for(const word of left)if(right.has(word))shared+=1;
-  return shared/Math.max(left.size,right.size);
-}
-async function tableExists(db:D1Database,name:string){
-  return Boolean(await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").bind(name).first());
-}
-
-function addDuplicateIssues(items:any[],kind:NodeKind,pathFor:(item:any)=>string,issues:AuditIssue[]){
-  const groups=new Map<string,any[]>();
-  for(const item of items){const key=norm(item.title??item.name);if(!key)continue;const list=groups.get(key)||[];list.push(item);groups.set(key,list);}
-  for(const list of groups.values())if(list.length>1){
-    issues.push({severity:'warning',kind:`duplicate_${kind}`,message:`Flera ${kind==='activity'?'aktiviteter':kind==='task'?'moment':kind==='work_section'?'arbetsavsnitt':'arbetsområden'} har samma normaliserade namn.`,nodeIds:list.map(x=>String(x.id)),paths:list.map(pathFor)});
-  }
-}
-
-function addSimilarActivityIssues(activities:any[],pathFor:(item:any)=>string,issues:AuditIssue[]){
-  const bySection=new Map<string,any[]>();
-  for(const activity of activities){const key=String(activity.work_section_id||'');const list=bySection.get(key)||[];list.push(activity);bySection.set(key,list);}
-  for(const list of bySection.values()){
-    for(let i=0;i<list.length;i++)for(let j=i+1;j<list.length;j++){
-      const a=list[i],b=list[j];
-      if(norm(a.title)===norm(b.title))continue;
-      const score=similarity(a.title,b.title);
-      if(score<0.72)continue;
-      issues.push({severity:'info',kind:'similar_activities',message:`Aktiviteterna liknar varandra semantiskt (${Math.round(score*100)}%). Kontrollera om de överlappar.`,nodeIds:[String(a.id),String(b.id)],paths:[pathFor(a),pathFor(b)]});
-    }
-  }
-}
-
-export function registerProjectStructureAuditRoutes(app:RouteApp){
-  app.get('/api/studio/projects/:projectId/structure-audit',async c=>{
-    const projectId=clean(c.req.param('projectId'));
-    const project=await c.env.DB.prepare('SELECT id,name,property_designation,status FROM projects WHERE id=?').bind(projectId).first<any>();
-    if(!project)return c.json({ok:false,error:'Projektet hittades inte.'},404);
-
-    const hasNodeLinks=await tableExists(c.env.DB,'project_master_node_links');
-    const hasActivityContexts=await tableExists(c.env.DB,'activity_contexts');
-    const hasExecutionContexts=await tableExists(c.env.DB,'activity_execution_contexts');
-    const hasGoverningLinks=await tableExists(c.env.DB,'governing_item_activity_links');
-    const hasGoverningItems=await tableExists(c.env.DB,'governing_items');
-    const hasGoverningDocuments=await tableExists(c.env.DB,'governing_documents');
-
-    const [areaRows,sectionRows,taskRows,activityRows]=await Promise.all([
-      c.env.DB.prepare(`SELECT wa.id,wa.name,wa.sort_order${hasNodeLinks?",pml.master_entity_id":",NULL master_entity_id"} FROM work_areas wa ${hasNodeLinks?"LEFT JOIN project_master_node_links pml ON pml.project_id=wa.project_id AND pml.entity_type='work_area' AND pml.entity_id=wa.id":""} WHERE wa.project_id=? ORDER BY wa.sort_order,wa.name`).bind(projectId).all(),
-      c.env.DB.prepare(`SELECT ws.id,ws.work_area_id,ws.name,ws.sort_order${hasNodeLinks?",pml.master_entity_id":",NULL master_entity_id"} FROM work_sections ws JOIN work_areas wa ON wa.id=ws.work_area_id ${hasNodeLinks?"LEFT JOIN project_master_node_links pml ON pml.project_id=wa.project_id AND pml.entity_type='work_section' AND pml.entity_id=ws.id":""} WHERE wa.project_id=? ORDER BY wa.sort_order,ws.sort_order,ws.name`).bind(projectId).all(),
-      c.env.DB.prepare(`SELECT t.id,t.work_section_id,t.title,t.description,t.status,t.sort_order${hasNodeLinks?",pml.master_entity_id":",NULL master_entity_id"} FROM tasks t JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id ${hasNodeLinks?"LEFT JOIN project_master_node_links pml ON pml.project_id=wa.project_id AND pml.entity_type='task' AND pml.entity_id=t.id":""} WHERE wa.project_id=? ORDER BY wa.sort_order,ws.sort_order,t.sort_order,t.title`).bind(projectId).all(),
-      c.env.DB.prepare(`SELECT a.id,a.task_id,a.title,a.description,a.activity_type,a.required,a.sort_order,t.work_section_id,ws.work_area_id${hasNodeLinks?",pml.master_entity_id":",NULL master_entity_id"}${hasActivityContexts?",ac.lifecycle_stage,ac.surface,ac.applicability,ac.condition_text":",NULL lifecycle_stage,NULL surface,NULL applicability,NULL condition_text"}${hasExecutionContexts?",ec.context execution_context,ec.source execution_source,ec.executor_type,ec.executor_label":",NULL execution_context,NULL execution_source,NULL executor_type,NULL executor_label"} FROM activities a JOIN tasks t ON t.id=a.task_id JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id ${hasNodeLinks?"LEFT JOIN project_master_node_links pml ON pml.project_id=wa.project_id AND pml.entity_type='activity' AND pml.entity_id=a.id":""} ${hasActivityContexts?"LEFT JOIN activity_contexts ac ON ac.activity_id=a.id":""} ${hasExecutionContexts?"LEFT JOIN activity_execution_contexts ec ON ec.activity_id=a.id":""} WHERE wa.project_id=? ORDER BY wa.sort_order,ws.sort_order,t.sort_order,a.sort_order,a.title`).bind(projectId).all()
-    ]);
-
-    const areas=(areaRows.results as any[]).map(row=>({...row,source:row.master_entity_id?'master':'project_specific'}));
-    const sections=(sectionRows.results as any[]).map(row=>({...row,source:row.master_entity_id?'master':'project_specific'}));
-    const tasks=(taskRows.results as any[]).map(row=>({...row,source:row.master_entity_id?'master':'project_specific'}));
-    const activities=(activityRows.results as any[]).map(row=>({...row,source:row.master_entity_id?'master':'project_specific',governing:[] as any[]}));
-
-    if(hasGoverningLinks&&hasGoverningItems&&hasGoverningDocuments){
-      const rows=await c.env.DB.prepare(`SELECT l.activity_id,l.mapping_source,l.link_type,d.id document_id,d.document_type,d.title document_title,i.id item_id,i.code,i.description,i.section_code,i.section_title FROM governing_item_activity_links l JOIN governing_items i ON i.id=l.governing_item_id JOIN governing_documents d ON d.id=i.governing_document_id JOIN activities a ON a.id=l.activity_id JOIN tasks t ON t.id=a.task_id JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id WHERE wa.project_id=? ORDER BY d.title,i.sort_order`).bind(projectId).all();
-      const byActivity=new Map(activities.map(item=>[String(item.id),item]));
-      for(const row of rows.results as any[]){const activity=byActivity.get(String(row.activity_id));if(activity)activity.governing.push({documentId:row.document_id,documentType:row.document_type,documentTitle:row.document_title,itemId:row.item_id,code:row.code,label:row.description,sectionCode:row.section_code,sectionTitle:row.section_title,mappingSource:row.mapping_source,linkType:row.link_type});}
-    }
-
-    const areaById=new Map(areas.map(item=>[String(item.id),item]));
-    const sectionById=new Map(sections.map(item=>[String(item.id),item]));
-    const taskById=new Map(tasks.map(item=>[String(item.id),item]));
-    const pathForSection=(item:any)=>`${areaById.get(String(item.work_area_id))?.name||'?'} › ${item.name}`;
-    const pathForTask=(item:any)=>{const section=sectionById.get(String(item.work_section_id));return `${areaById.get(String(section?.work_area_id))?.name||'?'} › ${section?.name||'?'} › ${item.title}`;};
-    const pathForActivity=(item:any)=>{const task=taskById.get(String(item.task_id)),section=sectionById.get(String(task?.work_section_id));return `${areaById.get(String(section?.work_area_id))?.name||'?'} › ${section?.name||'?'} › ${task?.title||'?'} › ${item.title}`;};
-
-    const issues:AuditIssue[]=[];
-    addDuplicateIssues(areas,'work_area',item=>item.name,issues);
-    addDuplicateIssues(sections,'work_section',pathForSection,issues);
-    addDuplicateIssues(tasks,'task',pathForTask,issues);
-    addDuplicateIssues(activities,'activity',pathForActivity,issues);
-    addSimilarActivityIssues(activities.filter(item=>String(item.applicability||'always')!=='deprecated'),pathForActivity,issues);
-
-    for(const section of sections){const childTasks=tasks.filter(task=>String(task.work_section_id)===String(section.id));if(childTasks.length===0)issues.push({severity:'warning',kind:'empty_section',message:'Arbetsavsnittet innehåller inga moment.',nodeIds:[String(section.id)],paths:[pathForSection(section)]});}
-    for(const task of tasks){const childActivities=activities.filter(activity=>String(activity.task_id)===String(task.id)&&String(activity.applicability||'always')!=='deprecated');if(childActivities.length===0)issues.push({severity:'warning',kind:'empty_task',message:'Momentet innehåller inga aktiva aktiviteter.',nodeIds:[String(task.id)],paths:[pathForTask(task)]});}
-    for(const activity of activities){
-      if(String(activity.applicability||'always')==='deprecated')issues.push({severity:'info',kind:'deprecated_activity',message:'Deprecated aktivitet finns kvar i projektets historik.',nodeIds:[String(activity.id)],paths:[pathForActivity(activity)]});
-      if(activity.source==='project_specific')issues.push({severity:'info',kind:'project_specific_activity',message:'Projektspecifik aktivitet som inte kommer från Master.',nodeIds:[String(activity.id)],paths:[pathForActivity(activity)]});
-    }
-
-    const tree=areas.map(area=>({...area,sections:sections.filter(section=>String(section.work_area_id)===String(area.id)).map(section=>({...section,tasks:tasks.filter(task=>String(task.work_section_id)===String(section.id)).map(task=>({...task,activities:activities.filter(activity=>String(activity.task_id)===String(task.id))}))}))}));
-
-    return c.json({
-      ok:true,
-      runtime:'structure-audit-v1',
-      project,
-      summary:{areas:areas.length,sections:sections.length,tasks:tasks.length,activities:activities.length,activeActivities:activities.filter(item=>String(item.applicability||'always')!=='deprecated').length,deprecatedActivities:activities.filter(item=>String(item.applicability||'always')==='deprecated').length,projectSpecificActivities:activities.filter(item=>item.source==='project_specific').length,issues:issues.length},
-      tree,
-      issues,
-      metadata:{hasNodeLinks,hasActivityContexts,hasExecutionContexts,hasGoverningLinks}
-    });
-  });
-}
+export function registerProjectStructureAuditRoutes(app:RouteApp){app.get('/api/studio/projects/:projectId/structure-audit',async c=>{const projectId=clean(c.req.param('projectId'));const project=await c.env.DB.prepare('SELECT id,name,property_designation,status FROM projects WHERE id=?').bind(projectId).first<any>();if(!project)return c.json({ok:false,error:'Projektet hittades inte.'},404);
+ const hasNodeLinks=await tableExists(c.env.DB,'project_master_node_links'),hasActivityContexts=await tableExists(c.env.DB,'activity_contexts'),hasExecutionContexts=await tableExists(c.env.DB,'activity_execution_contexts'),hasGoverningLinks=await tableExists(c.env.DB,'governing_item_activity_links'),hasGoverningItems=await tableExists(c.env.DB,'governing_items'),hasGoverningDocuments=await tableExists(c.env.DB,'governing_documents');
+ const [areaRows,sectionRows,taskRows,activityRows]=await Promise.all([
+ c.env.DB.prepare(`SELECT wa.id,wa.name,wa.sort_order${hasNodeLinks?",pml.master_entity_id":",NULL master_entity_id"} FROM work_areas wa ${hasNodeLinks?"LEFT JOIN project_master_node_links pml ON pml.project_id=wa.project_id AND pml.entity_type='work_area' AND pml.entity_id=wa.id":""} WHERE wa.project_id=? ORDER BY wa.sort_order,wa.name`).bind(projectId).all(),
+ c.env.DB.prepare(`SELECT ws.id,ws.work_area_id,ws.name,ws.sort_order${hasNodeLinks?",pml.master_entity_id":",NULL master_entity_id"} FROM work_sections ws JOIN work_areas wa ON wa.id=ws.work_area_id ${hasNodeLinks?"LEFT JOIN project_master_node_links pml ON pml.project_id=wa.project_id AND pml.entity_type='work_section' AND pml.entity_id=ws.id":""} WHERE wa.project_id=? ORDER BY wa.sort_order,ws.sort_order,ws.name`).bind(projectId).all(),
+ c.env.DB.prepare(`SELECT t.id,t.work_section_id,t.title,t.description,t.status,t.sort_order${hasNodeLinks?",pml.master_entity_id":",NULL master_entity_id"} FROM tasks t JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id ${hasNodeLinks?"LEFT JOIN project_master_node_links pml ON pml.project_id=wa.project_id AND pml.entity_type='task' AND pml.entity_id=t.id":""} WHERE wa.project_id=? ORDER BY wa.sort_order,ws.sort_order,t.sort_order,t.title`).bind(projectId).all(),
+ c.env.DB.prepare(`SELECT a.id,a.task_id,a.title,a.description,a.activity_type,a.required,a.sort_order,t.work_section_id,ws.work_area_id${hasNodeLinks?",pml.master_entity_id":",NULL master_entity_id"}${hasActivityContexts?",ac.lifecycle_stage,ac.surface,ac.applicability,ac.condition_text":",NULL lifecycle_stage,NULL surface,NULL applicability,NULL condition_text"}${hasExecutionContexts?",ec.context execution_context,ec.source execution_source,ec.executor_type,ec.executor_label":",NULL execution_context,NULL execution_source,NULL executor_type,NULL executor_label"} FROM activities a JOIN tasks t ON t.id=a.task_id JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id ${hasNodeLinks?"LEFT JOIN project_master_node_links pml ON pml.project_id=wa.project_id AND pml.entity_type='activity' AND pml.entity_id=a.id":""} ${hasActivityContexts?"LEFT JOIN activity_contexts ac ON ac.activity_id=a.id":""} ${hasExecutionContexts?"LEFT JOIN activity_execution_contexts ec ON ec.activity_id=a.id":""} WHERE wa.project_id=? ORDER BY wa.sort_order,ws.sort_order,t.sort_order,a.sort_order,a.title`).bind(projectId).all()]);
+ const areas=(areaRows.results as any[]).map(row=>({...row,source:row.master_entity_id?'master':'project_specific'})),sections=(sectionRows.results as any[]).map(row=>({...row,source:row.master_entity_id?'master':'project_specific'})),tasks=(taskRows.results as any[]).map(row=>({...row,source:row.master_entity_id?'master':'project_specific'})),activities=(activityRows.results as any[]).map(row=>({...row,source:row.master_entity_id?'master':'project_specific',governing:[] as any[]}));
+ if(hasGoverningLinks&&hasGoverningItems&&hasGoverningDocuments){const rows=await c.env.DB.prepare(`SELECT l.activity_id,l.mapping_source,l.link_type,d.id document_id,d.document_type,d.title document_title,i.id item_id,i.code,i.description,i.section_code,i.section_title FROM governing_item_activity_links l JOIN governing_items i ON i.id=l.governing_item_id JOIN governing_documents d ON d.id=i.governing_document_id JOIN activities a ON a.id=l.activity_id JOIN tasks t ON t.id=a.task_id JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id WHERE wa.project_id=? ORDER BY d.title,i.sort_order`).bind(projectId).all();const byActivity=new Map(activities.map(item=>[String(item.id),item]));for(const row of rows.results as any[]){const activity=byActivity.get(String(row.activity_id));if(activity)activity.governing.push({documentId:row.document_id,documentType:row.document_type,documentTitle:row.document_title,itemId:row.item_id,code:row.code,label:row.description,sectionCode:row.section_code,sectionTitle:row.section_title,mappingSource:row.mapping_source,linkType:row.link_type})}}
+ const areaById=new Map(areas.map(item=>[String(item.id),item])),sectionById=new Map(sections.map(item=>[String(item.id),item])),taskById=new Map(tasks.map(item=>[String(item.id),item]));const pathForSection=(item:any)=>`${areaById.get(String(item.work_area_id))?.name||'?'} › ${item.name}`,pathForTask=(item:any)=>{const section=sectionById.get(String(item.work_section_id));return `${areaById.get(String(section?.work_area_id))?.name||'?'} › ${section?.name||'?'} › ${item.title}`},pathForActivity=(item:any)=>{const task=taskById.get(String(item.task_id)),section=sectionById.get(String(task?.work_section_id));return `${areaById.get(String(section?.work_area_id))?.name||'?'} › ${section?.name||'?'} › ${task?.title||'?'} › ${item.title}`};
+ const activeActivities=activities.filter(item=>String(item.applicability||'always')!=='deprecated'),activeTaskIds=new Set(activeActivities.map(item=>String(item.task_id))),activeTasks=tasks.filter(item=>activeTaskIds.has(String(item.id))),activeSectionIds=new Set(activeTasks.map(item=>String(item.work_section_id))),activeSections=sections.filter(item=>activeSectionIds.has(String(item.id)));
+ const issues:AuditIssue[]=[];addDuplicateIssues(areas,'work_area',item=>item.name,issues);addDuplicateIssues(activeSections,'work_section',pathForSection,issues);addDuplicateIssues(activeTasks,'task',pathForTask,issues);addDuplicateIssues(activeActivities,'activity',pathForActivity,issues);addSimilarActivityIssues(activeActivities,pathForActivity,issues);
+ for(const section of sections){const childTasks=activeTasks.filter(task=>String(task.work_section_id)===String(section.id));if(childTasks.length===0)issues.push({severity:'warning',kind:'empty_section',message:'Arbetsavsnittet innehåller inga moment med aktiva aktiviteter.',nodeIds:[String(section.id)],paths:[pathForSection(section)]})}for(const task of tasks){const childActivities=activeActivities.filter(activity=>String(activity.task_id)===String(task.id));if(childActivities.length===0)issues.push({severity:'warning',kind:'empty_task',message:'Momentet innehåller inga aktiva aktiviteter.',nodeIds:[String(task.id)],paths:[pathForTask(task)]})}for(const activity of activities){if(String(activity.applicability||'always')==='deprecated')issues.push({severity:'info',kind:'deprecated_activity',message:'Deprecated aktivitet finns kvar i projektets historik.',nodeIds:[String(activity.id)],paths:[pathForActivity(activity)]});if(activity.source==='project_specific')issues.push({severity:'info',kind:'project_specific_activity',message:'Projektspecifik aktivitet som inte kommer från Master.',nodeIds:[String(activity.id)],paths:[pathForActivity(activity)]})}
+ const warnings=issues.filter(i=>i.severity==='warning').length,infos=issues.filter(i=>i.severity==='info').length;const tree=areas.map(area=>({...area,sections:sections.filter(section=>String(section.work_area_id)===String(area.id)).map(section=>({...section,tasks:tasks.filter(task=>String(task.work_section_id)===String(section.id)).map(task=>({...task,activities:activities.filter(activity=>String(activity.task_id)===String(task.id))}))}))}));
+ return c.json({ok:true,runtime:'structure-audit-v2',project,summary:{areas:areas.length,sections:sections.length,tasks:tasks.length,activities:activities.length,activeActivities:activeActivities.length,deprecatedActivities:activities.length-activeActivities.length,projectSpecificActivities:activities.filter(item=>item.source==='project_specific').length,issues:issues.length,activeProblems:warnings,historicalInfo:infos},tree,issues,metadata:{hasNodeLinks,hasActivityContexts,hasExecutionContexts,hasGoverningLinks}})
+ })}
