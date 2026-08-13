@@ -15,6 +15,9 @@ const DEFAULT_ITEMS:DefaultItem[] = [
   {code:'bas_u',title:'BAS-U är utsedd'}
 ];
 
+// These mappings only connect the four structured project checkpoints to their
+// source activities. They are not used to decide whether arbitrary activities
+// are administrative checkpoints.
 const ADMIN_TITLE_MAP:Record<string,DefaultItem> = {
   'Kontrollera att startbesked finns':{code:'startbesked',title:'Startbesked finns'},
   'Säkerställ att startbesked har erhållits före byggstart':{code:'startbesked',title:'Startbesked finns'},
@@ -75,7 +78,7 @@ async function syncAdministrativeActivities(db:D1Database,projectId:string){
   const applicabilityExpr=hasActivityContexts?"COALESCE(ac.applicability,'always')":"'always'";
   const surfaceExpr=hasActivityContexts?"COALESCE(ac.surface,'field')":"'field'";
   const contextExpr=hasExecutionContexts?"COALESCE(ec.context,'field')":"'field'";
-  const rows=await db.prepare(`SELECT a.id,a.title,wa.name work_area,ws.name work_section,t.title task_title,
+  const rows=await db.prepare(`SELECT a.id,a.title,a.activity_type,wa.name work_area,ws.name work_section,t.title task_title,
       ${applicabilityExpr} applicability,${surfaceExpr} surface,${contextExpr} execution_context
     FROM activities a
     JOIN tasks t ON t.id=a.task_id
@@ -85,15 +88,18 @@ async function syncAdministrativeActivities(db:D1Database,projectId:string){
     WHERE wa.project_id=?
     ORDER BY wa.sort_order,ws.sort_order,t.sort_order,a.sort_order,a.id`).bind(projectId).all();
 
-  const activeAdminIds=new Set<string>();
+  const activeCheckpointIds=new Set<string>();
   const orderRow=await db.prepare('SELECT COALESCE(MAX(sort_order),0) AS max_order FROM project_administration_items WHERE project_id=?').bind(projectId).first<{max_order:number}>();
   let sortOrder=Number(orderRow?.max_order||0);
   for(const row of rows.results as any[]){
-    const activityId=String(row.id),sourceTitle=String(row.title||'');
+    const activityId=String(row.id),sourceTitle=String(row.title||''),activityType=String(row.activity_type||'');
     const active=String(row.applicability||'always')!=='deprecated';
     const administrative=String(row.surface||'field')==='studio'||String(row.execution_context||'field')==='administrative';
-    if(!active||!administrative)continue;
-    activeAdminIds.add(activityId);
+    const structuredCheckpoint=Boolean(ADMIN_TITLE_MAP[sourceTitle]);
+    const verifiableCheckpoint=activityType==='check'||activityType==='approval';
+    if(!active||!administrative||(!structuredCheckpoint&&!verifiableCheckpoint))continue;
+
+    activeCheckpointIds.add(activityId);
     const mapped=ADMIN_TITLE_MAP[sourceTitle]||{code:`activity_${activityId}`,title:sourceTitle};
     const sourcePath=`${row.work_area} › ${row.work_section} › ${row.task_title} › ${sourceTitle}`;
     let existing=await db.prepare('SELECT id FROM project_administration_items WHERE source_activity_id=?').bind(activityId).first<any>();
@@ -109,7 +115,7 @@ async function syncAdministrativeActivities(db:D1Database,projectId:string){
     await db.prepare("INSERT INTO project_administration_items(id,project_id,code,title,data_json,sort_order,source_activity_id,source_path) VALUES(?,?,?,?, '{}',?,?,?)")
       .bind(crypto.randomUUID(),projectId,mapped.code,mapped.title,sortOrder,activityId,sourcePath).run();
   }
-  return activeAdminIds;
+  return activeCheckpointIds;
 }
 
 function decorate(row:any){let data:Record<string,string>={};try{data=JSON.parse(row.data_json||'{}')}catch{}return {...row,data}}
@@ -122,10 +128,10 @@ export function registerProjectAdministrationRoutes(app: RouteApp) {
     const project = await c.env.DB.prepare('SELECT id FROM projects WHERE id=?').bind(projectId).first();
     if (!project) return c.json({ok:false,error:'Projektet hittades inte.'},404);
     await ensureDefaults(c.env.DB,projectId);
-    const activeAdminIds=await syncAdministrativeActivities(c.env.DB,projectId);
+    const activeCheckpointIds=await syncAdministrativeActivities(c.env.DB,projectId);
     const result = await c.env.DB.prepare('SELECT id,code,title,completed,value_text,note,data_json,sort_order,source_activity_id,source_path FROM project_administration_items WHERE project_id=? ORDER BY sort_order,id').bind(projectId).all();
-    const items=(result.results as any[]).filter(row=>!row.source_activity_id||activeAdminIds.has(String(row.source_activity_id))).map(decorate);
-    return c.json({ok:true,items,diagnostics:{administrativeActivities:activeAdminIds.size}});
+    const items=(result.results as any[]).filter(row=>!row.source_activity_id||activeCheckpointIds.has(String(row.source_activity_id))).map(decorate);
+    return c.json({ok:true,items,diagnostics:{administrativeCheckpointActivities:activeCheckpointIds.size}});
   });
 
   app.post('/api/studio/project-administration', async c => {
@@ -135,8 +141,7 @@ export function registerProjectAdministrationRoutes(app: RouteApp) {
     const project=await c.env.DB.prepare('SELECT id FROM projects WHERE id=?').bind(projectId).first();if(!project)return c.json({ok:false,error:'Projektet hittades inte.'},404);
     const order=await c.env.DB.prepare('SELECT COALESCE(MAX(sort_order),0)+10 AS next_order FROM project_administration_items WHERE project_id=?').bind(projectId).first<{next_order:number}>();
     const id=crypto.randomUUID(), code=text(body.code)||codeFromTitle(title), data=cleanData(body.data);
-    await c.env.DB.prepare('INSERT INTO project_administration_items(id,project_id,code,title,completed,value_text,note,data_json,sort_order) VALUES(?,?,?,?,?,?,?,?,?)')
-      .bind(id,projectId,code,title,body.completed?1:0,text(body.valueText),text(body.note),JSON.stringify(data),Number(order?.next_order??10)).run();
+    await dbPrepareInsert(c.env.DB,id,projectId,code,title,body.completed?1:0,text(body.valueText),text(body.note),JSON.stringify(data),Number(order?.next_order??10));
     return c.json({ok:true,id},201);
   });
 
@@ -157,4 +162,9 @@ export function registerProjectAdministrationRoutes(app: RouteApp) {
     if(existing.source_activity_id)return c.json({ok:false,error:'Punkten kommer från projektstrukturen och ändras eller tas bort på aktiviteten.'},409);
     const result=await c.env.DB.prepare('DELETE FROM project_administration_items WHERE id=?').bind(c.req.param('id')).run();if(!result.meta.changes)return c.json({ok:false,error:'Den administrativa punkten hittades inte.'},404);return c.json({ok:true});
   });
+}
+
+async function dbPrepareInsert(db:D1Database,id:string,projectId:string,code:string,title:string,completed:number,valueText:string,note:string,dataJson:string,sortOrder:number){
+  await db.prepare('INSERT INTO project_administration_items(id,project_id,code,title,completed,value_text,note,data_json,sort_order) VALUES(?,?,?,?,?,?,?,?,?)')
+    .bind(id,projectId,code,title,completed,valueText,note,dataJson,sortOrder).run();
 }
