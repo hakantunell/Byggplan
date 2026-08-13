@@ -24,6 +24,7 @@ export function registerProjectFieldMetadataRoutes(app:RouteApp){
     if(!projectId)return c.json({ok:false,error:'projectId krävs.'},400);
 
     const hasExecution=await tableExists(c.env.DB,'activity_execution_contexts');
+    const hasActivityContexts=await tableExists(c.env.DB,'activity_contexts');
     const hasLinks=await tableExists(c.env.DB,'governing_item_activity_links');
     const hasItems=await tableExists(c.env.DB,'governing_items');
     const hasDocuments=await tableExists(c.env.DB,'governing_documents');
@@ -31,22 +32,32 @@ export function registerProjectFieldMetadataRoutes(app:RouteApp){
     const executionJoin=hasExecution
       ? 'LEFT JOIN activity_execution_contexts ec ON ec.activity_id=a.id'
       : '';
+    const activityContextJoin=hasActivityContexts
+      ? 'LEFT JOIN activity_contexts ac ON ac.activity_id=a.id'
+      : '';
     const contextExpr=hasExecution?"COALESCE(ec.context,'field')":"'field'";
     const executorExpr=hasExecution?"COALESCE(ec.executor_type,'self')":"'self'";
     const executorLabelExpr=hasExecution?'ec.executor_label':'NULL';
     const sourceExpr=hasExecution?"COALESCE(ec.source,'system')":"'system'";
+    const applicabilityExpr=hasActivityContexts?"COALESCE(ac.applicability,'always')":"'always'";
+    const surfaceExpr=hasActivityContexts?"COALESCE(ac.surface,'field')":"'field'";
+    const lifecycleExpr=hasActivityContexts?"COALESCE(ac.lifecycle_stage,'build')":"'build'";
 
     const rows=await c.env.DB.prepare(`SELECT
         a.id AS activity_id,a.activity_type,
         ${contextExpr} AS context,
         ${executorExpr} AS executor_type,
         ${executorLabelExpr} AS executor_label,
-        ${sourceExpr} AS execution_source
+        ${sourceExpr} AS execution_source,
+        ${applicabilityExpr} AS applicability,
+        ${surfaceExpr} AS surface,
+        ${lifecycleExpr} AS lifecycle_stage
       FROM activities a
       JOIN tasks t ON t.id=a.task_id
       JOIN work_sections ws ON ws.id=t.work_section_id
       JOIN work_areas wa ON wa.id=ws.work_area_id
       ${executionJoin}
+      ${activityContextJoin}
       WHERE wa.project_id=?
       ORDER BY wa.sort_order,ws.sort_order,t.sort_order,a.sort_order`).bind(projectId).all();
 
@@ -59,6 +70,9 @@ export function registerProjectFieldMetadataRoutes(app:RouteApp){
         executor_type:String(row.executor_type||'self'),
         executor_label:row.executor_label??null,
         execution_source:String(row.execution_source||'system'),
+        applicability:String(row.applicability||'always'),
+        surface:String(row.surface||'field'),
+        lifecycle_stage:String(row.lifecycle_stage||'build'),
         governing_documents:[] as any[]
       });
     }
@@ -100,8 +114,6 @@ export function registerProjectFieldMetadataRoutes(app:RouteApp){
           mappingSource:'explicit'
         });
 
-        // Governing responsibility may determine the executor for controls/documents,
-        // but must never turn an ordinary perform activity into third-party work.
         if(item.execution_source!=='manual'
           && item.activity_type!=='perform'
           && item.executor_type!=='third_party'
@@ -116,7 +128,7 @@ export function registerProjectFieldMetadataRoutes(app:RouteApp){
     return c.json({
       ok:true,
       items:[...byActivity.values()],
-      diagnostics:{activities:byActivity.size,links:linkCount,hasExecution,hasLinks,hasItems,hasDocuments}
+      diagnostics:{activities:byActivity.size,links:linkCount,hasExecution,hasActivityContexts,hasLinks,hasItems,hasDocuments}
     });
   });
 }
