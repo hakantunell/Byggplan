@@ -8,6 +8,7 @@ import { registerProjectStructureCleanupV18Routes } from './project-structure-cl
 import { registerProjectStructureCleanupV19Routes } from './project-structure-cleanup-v19';
 import { registerProjectStructureCleanupV20Routes } from './project-structure-cleanup-v20';
 import { registerProjectStructureCleanupV21Routes } from './project-structure-cleanup-v21';
+import { registerProjectStructureConsolidateV21Routes } from './project-structure-consolidate-v21';
 import { registerOpenApiRoutes } from './openapi-routes';
 import { registerProjectSupportAttachmentUploadRoutes } from './project-support-attachment-upload-routes';
 import { registerProjectSupportRoutes } from './project-support-routes';
@@ -43,6 +44,7 @@ registerProjectStructureCleanupV18Routes(app as any);
 registerProjectStructureCleanupV19Routes(app as any);
 registerProjectStructureCleanupV20Routes(app as any);
 registerProjectStructureCleanupV21Routes(app as any);
+registerProjectStructureConsolidateV21Routes(app as any);
 registerOpenApiRoutes(app as any);
 registerProjectSupportAttachmentUploadRoutes(app as any);
 registerProjectSupportRoutes(app as any);
