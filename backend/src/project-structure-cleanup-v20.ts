@@ -1,5 +1,3 @@
-import { cleanupProjectStructureV19 } from './project-structure-cleanup-v19';
-
 type RouteApp={post:(path:string,handler:(c:any)=>unknown)=>void};
 
 async function tableExists(db:D1Database,name:string){return Boolean(await db.prepare("SELECT 1 ok FROM sqlite_master WHERE type='table' AND name=?").bind(name).first())}
@@ -19,6 +17,6 @@ async function mergeAllDuplicateTasks(db:D1Database,projectId:string){
  return {mergedTasks,retiredActivities};
 }
 
-export async function cleanupProjectStructureV20(db:D1Database,projectId:string){await ensureContextSchema(db);const previous=await cleanupProjectStructureV19(db,projectId);const duplicates=await mergeAllDuplicateTasks(db,projectId);return{previous,...duplicates}}
+export async function cleanupProjectStructureV20(db:D1Database,projectId:string){await ensureContextSchema(db);return mergeAllDuplicateTasks(db,projectId)}
 
 export function registerProjectStructureCleanupV20Routes(app:RouteApp){app.post('/api/studio/projects/:projectId/structure-cleanup-v20',async c=>{const projectId=c.req.param('projectId');const project=await c.env.DB.prepare('SELECT id FROM projects WHERE id=?').bind(projectId).first();if(!project)return c.json({ok:false,error:'Projektet hittades inte.'},404);try{return c.json({ok:true,runtime:'structure-cleanup-v20',result:await cleanupProjectStructureV20(c.env.DB,projectId)})}catch(error){console.error('structure cleanup v20 failed',error);return c.json({ok:false,error:error instanceof Error?error.message:String(error)},500)}})}
