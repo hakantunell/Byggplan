@@ -4,6 +4,7 @@ import { registerMasterProjectCloneRoutes } from './master-project-clone-routes'
 import { registerMasterProjectModuleRoutes } from './master-project-module-routes';
 import { ensureMasterV17, registerMasterProjectV2UpgradeRoutesV17 } from './master-project-v2-upgrade-routes-v17';
 import { registerProjectStructureAuditRoutes } from './project-structure-audit-routes';
+import { registerOpenApiRoutes } from './openapi-routes';
 import { registerProjectSupportAttachmentUploadRoutes } from './project-support-attachment-upload-routes';
 import { registerProjectSupportRoutes } from './project-support-routes';
 import { registerProjectSupportJsonUploadRoutes } from './project-support-json-upload-routes';
@@ -34,6 +35,7 @@ registerMasterProjectModuleRoutes(app as any);
 registerMasterProjectV2UpgradeRoutesV17(app as any);
 registerMasterProjectCloneRoutes(app as any);
 registerProjectStructureAuditRoutes(app as any);
+registerOpenApiRoutes(app as any);
 registerProjectSupportAttachmentUploadRoutes(app as any);
 registerProjectSupportRoutes(app as any);
 registerProjectSupportJsonUploadRoutes(app as any);
