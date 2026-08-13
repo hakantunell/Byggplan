@@ -12,21 +12,7 @@ export async function normalizeProjectStructure(db:D1Database,projectId:string){
   const source=await db.prepare(`SELECT ws.id FROM work_sections ws JOIN work_areas wa ON wa.id=ws.work_area_id WHERE wa.project_id=? AND lower(trim(ws.name))=lower('Vald stomtyp') ORDER BY ws.sort_order LIMIT 1`).bind(projectId).first<any>();
 
   if(target&&source&&String(target.id)!==String(source.id)){
-    const tasks=await db.prepare('SELECT id,title FROM tasks WHERE work_section_id=? ORDER BY sort_order').bind(source.id).all();
-    for(const task of tasks.results as any[]){
-      const same=await db.prepare('SELECT id FROM tasks WHERE work_section_id=? AND lower(trim(title))=lower(trim(?)) LIMIT 1').bind(target.id,String(task.title)).first<any>();
-      if(!same){
-        await db.prepare('UPDATE tasks SET work_section_id=?,section=? WHERE id=?').bind(target.id,'Stomme',task.id).run();
-        continue;
-      }
-      const activities=await db.prepare('SELECT id,title FROM activities WHERE task_id=? ORDER BY sort_order').bind(task.id).all();
-      for(const activity of activities.results as any[]){
-        const duplicate=await db.prepare('SELECT id FROM activities WHERE task_id=? AND lower(trim(title))=lower(trim(?)) LIMIT 1').bind(same.id,String(activity.title)).first<any>();
-        if(!duplicate)await db.prepare('UPDATE activities SET task_id=? WHERE id=?').bind(same.id,activity.id).run();
-        else await deprecateActivity(db,String(activity.id),'Ersatt vid sammanslagning av stomstruktur.');
-      }
-    }
-    await db.prepare('DELETE FROM tasks WHERE work_section_id=? AND NOT EXISTS(SELECT 1 FROM activities a WHERE a.task_id=tasks.id)').bind(source.id).run();
+    await db.prepare('UPDATE tasks SET work_section_id=?,section=? WHERE work_section_id=?').bind(target.id,'Stomme',source.id).run();
     await db.prepare('DELETE FROM work_sections WHERE id=? AND NOT EXISTS(SELECT 1 FROM tasks t WHERE t.work_section_id=work_sections.id)').bind(source.id).run();
   }
 
