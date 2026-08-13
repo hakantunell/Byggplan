@@ -5,11 +5,51 @@ type RouteApp={
   put:(path:string,handler:(c:any)=>unknown)=>void;
 };
 
+function norm(value:unknown){
+  return String(value||'').toLocaleLowerCase('sv-SE').replace(/[–—]/g,'-').replace(/\s+/g,' ').trim();
+}
+
 function semanticKinds(item:any){
   const values=Array.isArray(item?.handling_kinds)&&item.handling_kinds.length
     ? item.handling_kinds
     : [item?.handling_kind||'work'];
   return new Set(values.map((value:unknown)=>String(value)));
+}
+
+function addKind(item:any,kind:string){
+  const kinds=semanticKinds(item);
+  kinds.add(kind);
+  item.handling_kinds=[...kinds];
+  if(!item.handling_kind)item.handling_kind=kind;
+}
+
+function normalizeMixedSemantics(data:any){
+  if(!data||!Array.isArray(data.items))return data;
+  for(const item of data.items){
+    const text=norm(`${item.description||''} ${item.section_title||''}`);
+
+    // Normative wording that requires something to be built, arranged, installed,
+    // prepared, stored or sorted contains a real work/action requirement even when
+    // the imported source row was broadly classified as a control point.
+    if(/\bska\b.*\b(utföras|placeras|förberedas|anordnas|ordnas|installeras|monteras|förvaras|sorteras)\b/.test(text)
+      || /\bfår inte\b.*\b(eldas|ledas|användas|placeras)\b/.test(text)){
+      addKind(item,'work');
+    }
+
+    // Requirements that execution shall follow applications, drawings, permits or
+    // manufacturer instructions also need an explicit verification dimension.
+    if(/\b(utföras|placeras|installeras|monteras)\b.*\benligt\b.*\b(ansökan|handling|ritning|tillstånd|anvisning|anvisningar|branschregler)\b/.test(text)){
+      addKind(item,'work');
+      addKind(item,'control');
+    }
+
+    // Ongoing care/inspection requirements belong to operation/management and may
+    // legitimately be represented by a documentation/management activity.
+    if(/\b(skötsel|skötas|drift|underhåll|underhållas)\b/.test(text)){
+      addKind(item,'operation');
+    }
+  }
+  return data;
 }
 
 function suggestionIsCompatible(item:any,activity:any){
@@ -22,12 +62,14 @@ function suggestionIsCompatible(item:any,activity:any){
   // against a perform activity, regardless of wording in a new control plan.
   if(activityType==='perform')return kinds.has('work');
 
-  // Checks and measurements are suitable for control semantics.
-  if(activityType==='check'||activityType==='measurement')return kinds.has('control');
+  // Checks and measurements are suitable both for ordinary controls and for
+  // administrative verification in Studio (for example checking that required
+  // pre-start documentation has been arranged).
+  if(activityType==='check'||activityType==='measurement')return kinds.has('control')||kinds.has('administration');
 
-  // Documentation activities may carry administration/evidence requirements and
-  // can also document a control when the governing item explicitly asks for it.
-  if(activityType==='document')return kinds.has('administration')||kinds.has('evidence')||kinds.has('control');
+  // Documentation activities may carry administration/evidence requirements,
+  // document controls, and represent operation/management requirements.
+  if(activityType==='document')return kinds.has('administration')||kinds.has('evidence')||kinds.has('control')||kinds.has('operation');
 
   // Other activity types are left to the semantic matcher; the important hard
   // boundary is that pure controls cannot leak into field execution cards.
@@ -101,6 +143,7 @@ export function registerGoverningMappingRoutesV16(app:RouteApp){
         if(!response||typeof response.clone!=='function'||!response.ok)return response;
         const data:any=await response.clone().json().catch(()=>null);
         if(!data)return response;
+        normalizeMixedSemantics(data);
         filterSuggestionsBySemantics(data);
         return c.json(data,response.status);
       });
