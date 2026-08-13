@@ -28,23 +28,16 @@ function normalizeMixedSemantics(data:any){
   for(const item of data.items){
     const text=norm(`${item.description||''} ${item.section_title||''}`);
 
-    // Normative wording that requires something to be built, arranged, installed,
-    // prepared, stored or sorted contains a real work/action requirement even when
-    // the imported source row was broadly classified as a control point.
     if(/\bska\b.*\b(utföras|placeras|förberedas|anordnas|ordnas|installeras|monteras|förvaras|sorteras)\b/.test(text)
       || /\bfår inte\b.*\b(eldas|ledas|användas|placeras)\b/.test(text)){
       addKind(item,'work');
     }
 
-    // Requirements that execution shall follow applications, drawings, permits or
-    // manufacturer instructions also need an explicit verification dimension.
     if(/\b(utföras|placeras|installeras|monteras)\b.*\benligt\b.*\b(ansökan|handling|ritning|tillstånd|anvisning|anvisningar|branschregler)\b/.test(text)){
       addKind(item,'work');
       addKind(item,'control');
     }
 
-    // Ongoing care/inspection requirements belong to operation/management and may
-    // legitimately be represented by a documentation/management activity.
     if(/\b(skötsel|skötas|drift|underhåll|underhållas)\b/.test(text)){
       addKind(item,'operation');
     }
@@ -57,22 +50,9 @@ function suggestionIsCompatible(item:any,activity:any){
   const kinds=semanticKinds(item);
   const activityType=String(activity.activity_type||'');
 
-  // An execution activity is valid only when the governing item actually contains
-  // a work/action requirement. A pure control item must therefore never be proposed
-  // against a perform activity, regardless of wording in a new control plan.
   if(activityType==='perform')return kinds.has('work');
-
-  // Checks and measurements are suitable both for ordinary controls and for
-  // administrative verification in Studio (for example checking that required
-  // pre-start documentation has been arranged).
   if(activityType==='check'||activityType==='measurement')return kinds.has('control')||kinds.has('administration');
-
-  // Documentation activities may carry administration/evidence requirements,
-  // document controls, and represent operation/management requirements.
   if(activityType==='document')return kinds.has('administration')||kinds.has('evidence')||kinds.has('control')||kinds.has('operation');
-
-  // Other activity types are left to the semantic matcher; the important hard
-  // boundary is that pure controls cannot leak into field execution cards.
   return true;
 }
 
@@ -88,46 +68,97 @@ function filterSuggestionsBySemantics(data:any){
   return data;
 }
 
-async function repairWindowControlMapping(db:D1Database,projectId:string){
-  const item=await db.prepare(`
-    SELECT i.id
-    FROM governing_items i
-    JOIN governing_documents d ON d.id=i.governing_document_id
-    WHERE d.project_id=?
-      AND d.document_type='control_plan'
-      AND i.item_type='control'
-      AND (lower(trim(i.code))='3.2' OR lower(trim(i.description))='fönster och dörrar')
-    ORDER BY i.sort_order
-    LIMIT 1
-  `).bind(projectId).first<any>();
-  if(!item)return;
+const STOP_WORDS=new Set([
+  'och','eller','samt','med','mot','för','vid','av','på','i','till','en','ett','den','det','de','som','ska','kontroll','kontrollera'
+]);
 
-  const target=await db.prepare(`
-    SELECT a.id
-    FROM activities a
-    JOIN tasks t ON t.id=a.task_id
-    JOIN work_sections ws ON ws.id=t.work_section_id
-    JOIN work_areas wa ON wa.id=ws.work_area_id
-    WHERE wa.project_id=?
-      AND a.activity_type='check'
-      AND lower(trim(a.title))=lower('Kontrollera fönster och dörrar mot handling, infästning och tätning')
-    LIMIT 1
-  `).bind(projectId).first<any>();
-  if(!target)return;
+const DOMAIN_GROUPS=[
+  ['stomme','timmer','bärande','konstruktion','stabilitet','upplag','infästning'],
+  ['bjälklag','golvbärning','golv','balk','bärning'],
+  ['isolering','värmeisolering','täthet','lufttäthet','klimatskal','vindskydd','ångbroms'],
+  ['vatten','avlopp','spillvatten','va','vvs','rör','sanitet'],
+  ['tak','takkonstruktion','takstol','ås','sparre'],
+  ['fönster','dörr','ytterdörr','öppning'],
+  ['grund','grundläggning','sula','mur','dränering'],
+  ['ventilation','frånluft','tilluft','imkanal'],
+  ['el','elinstallation','elektrisk'],
+  ['brand','brandskydd','utrymning','rökkanal','eldstad']
+];
 
-  await db.prepare(`
-    DELETE FROM governing_item_activity_links
-    WHERE governing_item_id=?
-      AND activity_id IN (
-        SELECT a.id FROM activities a WHERE a.activity_type='perform'
-      )
-  `).bind(String(item.id)).run();
+function words(value:unknown){
+  return norm(value)
+    .replace(/[^a-zåäö0-9]+/g,' ')
+    .split(' ')
+    .filter(word=>word.length>2&&!STOP_WORDS.has(word));
+}
 
-  await db.prepare(`
-    INSERT OR IGNORE INTO governing_item_activity_links
-      (id,governing_item_id,activity_id,link_type,created_at)
-    VALUES(?,?,?,'supports',datetime('now'))
-  `).bind(crypto.randomUUID(),String(item.id),String(target.id)).run();
+function domainSet(value:unknown){
+  const text=norm(value);
+  const set=new Set<number>();
+  DOMAIN_GROUPS.forEach((terms,index)=>{
+    if(terms.some(term=>text.includes(term)))set.add(index);
+  });
+  return set;
+}
+
+function domainScore(item:any,activity:any){
+  const itemText=`${item.section_title||''} ${item.section_code||''} ${item.description||''}`;
+  const activityText=`${activity.area_name||''} ${activity.section_name||''} ${activity.task_title||''} ${activity.title||''} ${activity.description||''}`;
+  const itemWords=new Set(words(itemText));
+  const activityWords=new Set(words(activityText));
+  let score=0;
+  for(const word of itemWords){if(activityWords.has(word))score+=2;}
+
+  const itemDomains=domainSet(itemText);
+  const activityDomains=domainSet(activityText);
+  for(const domain of itemDomains){if(activityDomains.has(domain))score+=5;}
+
+  const description=norm(item.description);
+  const title=norm(activity.title);
+  if(description&&title&&(title.includes(description)||description.includes(title)))score+=4;
+  return score;
+}
+
+function asDomainSuggestion(activity:any,score:number){
+  return{
+    activity_id:activity.id,
+    title:activity.title,
+    task_title:activity.task_title,
+    section_name:activity.section_name,
+    area_name:activity.area_name,
+    confidence:Math.min(96,82+score),
+    lifecycle_stage:activity.lifecycle_stage,
+    surface:activity.surface,
+    applicability:activity.applicability,
+    condition_text:activity.condition_text
+  };
+}
+
+function addDomainFallbackSuggestions(data:any){
+  if(!data||!Array.isArray(data.items)||!Array.isArray(data.activities)||!data.suggestions)return data;
+  const controls=data.activities.filter((activity:any)=>
+    String(activity.applicability||'always')!=='deprecated'
+    && (activity.activity_type==='check'||activity.activity_type==='measurement')
+  );
+
+  for(const item of data.items){
+    if(item.project_condition||Number(item.mapped_activity_count||0)>0)continue;
+    if(!semanticKinds(item).has('control'))continue;
+    if((data.suggestions[item.id]||[]).length>0)continue;
+
+    const ranked=controls
+      .map((activity:any)=>({activity,score:domainScore(item,activity)}))
+      .filter((candidate:any)=>candidate.score>=7)
+      .sort((a:any,b:any)=>b.score-a.score);
+
+    if(!ranked.length)continue;
+    const best=ranked[0];
+    const second=ranked[1];
+    if(second&&best.score-second.score<2)continue;
+
+    data.suggestions[item.id]=[asDomainSuggestion(best.activity,best.score)];
+  }
+  return data;
 }
 
 export function registerGoverningMappingRoutesV16(app:RouteApp){
@@ -138,20 +169,19 @@ export function registerGoverningMappingRoutesV16(app:RouteApp){
         return;
       }
       app.get(path,async c=>{
-        await repairWindowControlMapping(c.env.DB,String(c.req.param('projectId')));
         const response:any=await handler(c);
         if(!response||typeof response.clone!=='function'||!response.ok)return response;
         const data:any=await response.clone().json().catch(()=>null);
         if(!data)return response;
         normalizeMixedSemantics(data);
         filterSuggestionsBySemantics(data);
+        addDomainFallbackSuggestions(data);
+        filterSuggestionsBySemantics(data);
+        data.runtime='mapping-v19';
         return c.json(data,response.status);
       });
     },
     put(path,handler){
-      // Mapping suggestions are filtered semantically on GET. Keep PUT available for
-      // explicit/manual project decisions rather than rejecting them from raw item_type,
-      // because mixed work+control requirements are legitimate.
       app.put(path,handler);
     }
   };
