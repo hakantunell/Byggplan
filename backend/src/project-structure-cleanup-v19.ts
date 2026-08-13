@@ -1,0 +1,42 @@
+import { cleanupProjectStructureV18 } from './project-structure-cleanup-v18';
+
+type RouteApp={post:(path:string,handler:(c:any)=>unknown)=>void};
+
+async function tableExists(db:D1Database,name:string){return Boolean(await db.prepare("SELECT 1 ok FROM sqlite_master WHERE type='table' AND name=?").bind(name).first())}
+async function ensureContextSchema(db:D1Database){await db.prepare(`CREATE TABLE IF NOT EXISTS activity_contexts(activity_id TEXT PRIMARY KEY,lifecycle_stage TEXT NOT NULL DEFAULT 'build',surface TEXT NOT NULL DEFAULT 'field',applicability TEXT NOT NULL DEFAULT 'always',condition_text TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL DEFAULT (datetime('now')),FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE CASCADE)`).run()}
+async function deprecate(db:D1Database,id:string,reason:string){await db.prepare(`INSERT INTO activity_contexts(activity_id,lifecycle_stage,surface,applicability,condition_text,updated_at) VALUES(?,'build','field','deprecated',?,datetime('now')) ON CONFLICT(activity_id) DO UPDATE SET applicability='deprecated',condition_text=excluded.condition_text,updated_at=datetime('now')`).bind(id,reason).run()}
+
+async function moveGoverningLinks(db:D1Database,fromId:string,toId:string){
+  if(!await tableExists(db,'governing_item_activity_links'))return;
+  const cols=await db.prepare('PRAGMA table_info(governing_item_activity_links)').all();
+  const names=new Set((cols.results as any[]).map(r=>String(r.name)));
+  const rows=await db.prepare('SELECT * FROM governing_item_activity_links WHERE activity_id=?').bind(fromId).all();
+  for(const row of rows.results as any[]){
+    const existing=await db.prepare('SELECT id FROM governing_item_activity_links WHERE governing_item_id=? AND activity_id=? LIMIT 1').bind(row.governing_item_id,toId).first<any>();
+    if(existing)continue;
+    const fields=['id','governing_item_id','activity_id','link_type','mapping_source','confidence','mapping_comment','created_at','confirmed_at'].filter(x=>names.has(x));
+    const values=fields.map(f=>f==='id'?crypto.randomUUID():f==='activity_id'?toId:row[f]??null);
+    await db.prepare(`INSERT INTO governing_item_activity_links(${fields.join(',')}) VALUES(${fields.map(()=>'?').join(',')})`).bind(...values).run();
+  }
+}
+
+async function findTask(db:D1Database,projectId:string,sectionName:string,title:string){return db.prepare(`SELECT t.id,t.title FROM tasks t JOIN work_sections s ON s.id=t.work_section_id JOIN work_areas w ON w.id=s.work_area_id WHERE w.project_id=? AND lower(trim(s.name))=lower(trim(?)) AND lower(trim(t.title))=lower(trim(?)) ORDER BY t.sort_order,t.id LIMIT 1`).bind(projectId,sectionName,title).first<any>()}
+async function findTasks(db:D1Database,projectId:string,sectionName:string,title:string){const r=await db.prepare(`SELECT t.id,t.title FROM tasks t JOIN work_sections s ON s.id=t.work_section_id JOIN work_areas w ON w.id=s.work_area_id WHERE w.project_id=? AND lower(trim(s.name))=lower(trim(?)) AND lower(trim(t.title))=lower(trim(?)) ORDER BY t.sort_order,t.id`).bind(projectId,sectionName,title).all();return r.results as any[]}
+
+async function mergeTaskInto(db:D1Database,projectId:string,sectionName:string,targetTitle:string,sourceTitle:string){
+  const target=await findTask(db,projectId,sectionName,targetTitle);const sources=await findTasks(db,projectId,sectionName,sourceTitle);if(!target||!sources.length)return 0;let merged=0;
+  for(const source of sources){if(String(source.id)===String(target.id))continue;const activities=await db.prepare('SELECT id,title FROM activities WHERE task_id=? ORDER BY sort_order,id').bind(source.id).all();
+    for(const activity of activities.results as any[]){const duplicate=await db.prepare('SELECT id FROM activities WHERE task_id=? AND lower(trim(title))=lower(trim(?)) AND id<>? ORDER BY sort_order,id LIMIT 1').bind(target.id,activity.title,activity.id).first<any>();if(duplicate){await moveGoverningLinks(db,String(activity.id),String(duplicate.id));await deprecate(db,String(activity.id),`Dublett efter sammanslagning av momentet ”${sourceTitle}” med ”${targetTitle}” i strukturstädning v19.`)}await db.prepare('UPDATE activities SET task_id=? WHERE id=?').bind(target.id,activity.id).run()}
+    if(await tableExists(db,'project_master_node_links'))await db.prepare("DELETE FROM project_master_node_links WHERE project_id=? AND entity_type='task' AND entity_id=?").bind(projectId,source.id).run();
+    await db.prepare('DELETE FROM tasks WHERE id=? AND NOT EXISTS(SELECT 1 FROM activities WHERE task_id=?)').bind(source.id,source.id).run();merged++;
+  }
+  return merged;
+}
+
+async function mergeDuplicateTasks(db:D1Database,projectId:string,sectionName:string,title:string){const tasks=await findTasks(db,projectId,sectionName,title);if(tasks.length<2)return 0;const keeper=tasks[0];let merged=0;for(const source of tasks.slice(1)){const activities=await db.prepare('SELECT id,title FROM activities WHERE task_id=? ORDER BY sort_order,id').bind(source.id).all();for(const activity of activities.results as any[]){const duplicate=await db.prepare('SELECT id FROM activities WHERE task_id=? AND lower(trim(title))=lower(trim(?)) ORDER BY sort_order,id LIMIT 1').bind(keeper.id,activity.title).first<any>();if(duplicate){await moveGoverningLinks(db,String(activity.id),String(duplicate.id));await deprecate(db,String(activity.id),`Dublett efter sammanslagning av dubbla momentet ”${title}” i strukturstädning v19.`)}await db.prepare('UPDATE activities SET task_id=? WHERE id=?').bind(keeper.id,activity.id).run()}if(await tableExists(db,'project_master_node_links'))await db.prepare("DELETE FROM project_master_node_links WHERE project_id=? AND entity_type='task' AND entity_id=?").bind(projectId,source.id).run();await db.prepare('DELETE FROM tasks WHERE id=? AND NOT EXISTS(SELECT 1 FROM activities WHERE task_id=?)').bind(source.id,source.id).run();merged++}return merged}
+
+async function deprecateActivityIfSpecificExists(db:D1Database,projectId:string,genericTitle:string,specificTitle:string){const specific=await db.prepare(`SELECT a.id FROM activities a JOIN tasks t ON t.id=a.task_id JOIN work_sections s ON s.id=t.work_section_id JOIN work_areas w ON w.id=s.work_area_id LEFT JOIN activity_contexts ac ON ac.activity_id=a.id WHERE w.project_id=? AND lower(trim(a.title))=lower(trim(?)) AND COALESCE(ac.applicability,'always')<>'deprecated' LIMIT 1`).bind(projectId,specificTitle).first<any>();if(!specific)return 0;const rows=await db.prepare(`SELECT a.id FROM activities a JOIN tasks t ON t.id=a.task_id JOIN work_sections s ON s.id=t.work_section_id JOIN work_areas w ON w.id=s.work_area_id LEFT JOIN activity_contexts ac ON ac.activity_id=a.id WHERE w.project_id=? AND lower(trim(a.title))=lower(trim(?)) AND COALESCE(ac.applicability,'always')<>'deprecated'`).bind(projectId,genericTitle).all();for(const row of rows.results as any[]){await moveGoverningLinks(db,String(row.id),String(specific.id));await deprecate(db,String(row.id),`Ersatt av ”${specificTitle}” i strukturstädning v19.`)}return (rows.results as any[]).length}
+
+export async function cleanupProjectStructureV19(db:D1Database,projectId:string){await ensureContextSchema(db);const previous=await cleanupProjectStructureV18(db,projectId);const result={previous,mergedTasks:0,retiredActivities:0};result.mergedTasks+=await mergeTaskInto(db,projectId,'Stomme','Res bärande stomme','Utför timmerstomme');result.mergedTasks+=await mergeDuplicateTasks(db,projectId,'Stomme','Bygg och kontrollera bärande bjälklag');result.retiredActivities+=await deprecateActivityIfSpecificExists(db,projectId,'Res vald bärande stomme','Res timmerstomme enligt konstruktionshandling');result.retiredActivities+=await deprecateActivityIfSpecificExists(db,projectId,'Kontrollera färdig timmerstomme','Kontrollera färdig timmerstomme mot konstruktionshandling');return result}
+
+export function registerProjectStructureCleanupV19Routes(app:RouteApp){app.post('/api/studio/projects/:projectId/structure-cleanup-v19',async c=>{const projectId=c.req.param('projectId');const project=await c.env.DB.prepare('SELECT id FROM projects WHERE id=?').bind(projectId).first();if(!project)return c.json({ok:false,error:'Projektet hittades inte.'},404);try{return c.json({ok:true,runtime:'structure-cleanup-v19',result:await cleanupProjectStructureV19(c.env.DB,projectId)})}catch(error){console.error('structure cleanup v19 failed',error);return c.json({ok:false,error:error instanceof Error?error.message:String(error)},500)}})}
