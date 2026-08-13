@@ -17,6 +17,6 @@ async function mergeAllDuplicateTasks(db:D1Database,projectId:string){
  return {mergedTasks,retiredActivities};
 }
 
-export async function cleanupProjectStructureV20(db:D1Database,projectId:string){await ensureContextSchema(db);return mergeAllDuplicateTasks(db,projectId)}
+export async function cleanupProjectStructureV20(db:D1Database,projectId:string){await ensureContextSchema(db);const result=await mergeAllDuplicateTasks(db,projectId);if(await tableExists(db,'project_master_snapshots')){const master=await db.prepare("SELECT id,code,version FROM master_projects WHERE code='fritidshus-v2' LIMIT 1").first<any>();if(master&&Number(master.version||0)>=20)await db.prepare('UPDATE project_master_snapshots SET master_project_id=?,master_project_code=?,master_project_version=? WHERE project_id=?').bind(master.id,master.code,Number(master.version),projectId).run()}return result}
 
 export function registerProjectStructureCleanupV20Routes(app:RouteApp){app.post('/api/studio/projects/:projectId/structure-cleanup-v20',async c=>{const projectId=c.req.param('projectId');const project=await c.env.DB.prepare('SELECT id FROM projects WHERE id=?').bind(projectId).first();if(!project)return c.json({ok:false,error:'Projektet hittades inte.'},404);try{return c.json({ok:true,runtime:'structure-cleanup-v20',result:await cleanupProjectStructureV20(c.env.DB,projectId)})}catch(error){console.error('structure cleanup v20 failed',error);return c.json({ok:false,error:error instanceof Error?error.message:String(error)},500)}})}
