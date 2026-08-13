@@ -7,7 +7,31 @@ const EXCEPTIONS=new Set(['not_applicable','cannot_verify','alternative_evidence
 function norm(v:unknown){return String(v||'').toLocaleLowerCase('sv-SE').replace(/[–—]/g,'-').replace(/\s+/g,' ').trim()}
 function unique<T>(xs:T[]){return [...new Set(xs)]}
 function activityTitleIndex(data:any){const m=new Map<string,any>();for(const a of Array.isArray(data.activities)?data.activities:[]){const key=norm(a.title);if(key&&!m.has(key))m.set(key,a)}return m}
-function conditionOnly(item:any){const t=norm(item.description);return /etablering, upplag och bodar ska rymmas inom den egna fastigheten/.test(t)}
+
+function standingProjectRule(item:any){
+ const t=norm(item.description);
+ if(!t)return false;
+
+ // Explicit persistent project/location constraints.
+ if(/etablering, upplag och bodar ska rymmas inom den egna fastigheten/.test(t))return true;
+
+ // Requirements explicitly stated to apply throughout the construction phase.
+ if(/under (hela )?(byggtiden|byggtid|byggskedet)|löpande under bygg/.test(t))return true;
+
+ // Ongoing housekeeping/storage/protection duties have no natural one-time completion event.
+ if(/\b(ska|måste)\s+(förvaras|hållas|skyddas|hanteras)\b/.test(t)
+   && !/\b(före|innan|efter|när)\b/.test(t))return true;
+
+ // Waste handling is a standing site rule, not a task that becomes permanently complete.
+ if(/byggavfall/.test(t)&&/(förvaras|sorteras|eldning|eldas)/.test(t))return true;
+
+ // Unconditional ongoing prohibitions are project rules. Keep event/phase-bound prohibitions
+ // as ordinary requirements so they may still become controls or activities.
+ if(/\b(får inte|är inte tillåten|är förbjuden)\b/.test(t)
+   && !/\b(före|innan|efter|när|senast)\b/.test(t))return true;
+
+ return false;
+}
 
 function refineSemantics(item:any){
  const t=norm(item.description);let kinds=(Array.isArray(item.handling_kinds)?[...item.handling_kinds]:[item.handling_kind||'work']) as RequirementKind[];let primary=(item.handling_kind||'work') as RequirementKind;
@@ -34,14 +58,14 @@ function refineSemantics(item:any){
  if(/sotare.*besiktigat/.test(t)){kinds=withDeadline(['control','administration']);primary='control'}
  if(/godkänt protokoll.*lämnas för slutbesked/.test(t)){kinds=withDeadline(['administration']);primary='administration'}
  if(/relationsritningar.*lämnas för slutbesked/.test(t)){kinds=withDeadline(['administration']);primary='administration'}
- if(conditionOnly(item)){kinds=withDeadline(['condition']);primary='condition'}
+ if(standingProjectRule(item)){kinds=withDeadline(['condition']);primary='condition'}
  else if(kinds.includes('condition')){
   const without=kinds.filter(k=>k!=='condition');
   const substantive=without.filter(k=>k!=='deadline');
   if(substantive.length){kinds=unique(without);if(primary==='condition')primary=substantive[0]}
   else{kinds=withDeadline(['control']);primary='control'}
  }
- return{...item,handling_kind:primary,handling_kinds:unique(kinds),project_condition:conditionOnly(item)};
+ return{...item,handling_kind:primary,handling_kinds:unique(kinds),project_condition:standingProjectRule(item)};
 }
 
 function exactTitlesFor(item:any):string[]{
@@ -115,7 +139,7 @@ function exactTitlesFor(item:any):string[]{
 
 function asSuggestion(a:any,confidence=98){return{activity_id:a.id,title:a.title,task_title:a.task_title,section_name:a.section_name,area_name:a.area_name,confidence,lifecycle_stage:a.lifecycle_stage,surface:a.surface,applicability:a.applicability,condition_text:a.condition_text}}
 function refineSuggestions(data:any,item:any,index:Map<string,any>,activeIds:Set<string>){
- if(conditionOnly(item))return[];
+ if(standingProjectRule(item))return[];
  const wanted=exactTitlesFor(item);if(wanted.length){const found=wanted.map(title=>index.get(norm(title))).filter(Boolean);if(found.length)return found.map((a:any)=>asSuggestion(a));}
  const current=(Array.isArray(data.suggestions?.[item.id])?[...data.suggestions[item.id]]:[]).filter((s:any)=>activeIds.has(String(s.activity_id)));const t=norm(item.description);
  const documentation=/intyg|protokoll|relationshandling|relationsritning|lämna in|skicka|samla|spara/.test(t);
@@ -144,9 +168,9 @@ export function registerGoverningMappingRoutesV15(app:RouteApp){
    app.get(path,async c=>{const response:any=await handler(c);if(!response||typeof response.clone!=='function'||!response.ok)return response;const data:any=await response.clone().json().catch(()=>null);if(!data||!Array.isArray(data.items))return response;
     data.activities=(Array.isArray(data.activities)?data.activities:[]).filter((a:any)=>String(a.applicability||'always')!=='deprecated');const activeIds=new Set<string>(data.activities.map((a:any)=>String(a.id)));data.items=data.items.map((item:any)=>refineSemantics(item));const index=activityTitleIndex(data);
     if(data.suggestions&&typeof data.suggestions==='object')for(const item of data.items)data.suggestions[item.id]=refineSuggestions(data,item,index,activeIds);
-    recalcCoverage(data);data.runtime='mapping-v17';return c.json(data,response.status)});
+    recalcCoverage(data);data.runtime='mapping-v18';return c.json(data,response.status)});
   },
-  put(path,handler){app.put(path,async c=>{const response:any=await handler(c);if(!response||typeof response.clone!=='function'||!response.ok)return response;const data:any=await response.clone().json().catch(()=>null);if(!data)return response;data.runtime='mapping-v17';return c.json(data,response.status)})}
+  put(path,handler){app.put(path,async c=>{const response:any=await handler(c);if(!response||typeof response.clone!=='function'||!response.ok)return response;const data:any=await response.clone().json().catch(()=>null);if(!data)return response;data.runtime='mapping-v18';return c.json(data,response.status)})}
  };
  registerGoverningMappingRoutesV14(proxy);
 }
