@@ -28,8 +28,10 @@ async function reconcileMaster(c:any,next:any){
 
 async function reconcileProjectStructure(c:any,next:any){
   if(c.req.method==='GET'){
-    const match=new URL(c.req.url).pathname.match(/^\/api\/(?:studio\/)?projects\/([^/]+)/);
-    if(match)await normalizeProjectStructure(c.env.DB,decodeURIComponent(match[1]));
+    const url=new URL(c.req.url);
+    const match=url.pathname.match(/^\/api\/(?:studio\/)?projects\/([^/]+)/);
+    const projectId=match?decodeURIComponent(match[1]):url.pathname==='/api/studio/structure'?String(url.searchParams.get('projectId')||''):'';
+    if(projectId)await normalizeProjectStructure(c.env.DB,projectId);
   }
   await next();
 }
@@ -38,6 +40,7 @@ app.use('/api/studio/master-projects',reconcileMaster);
 app.use('/api/studio/master-projects/*',reconcileMaster);
 app.use('/api/studio/projects/*',reconcileProjectStructure);
 app.use('/api/projects/*',reconcileProjectStructure);
+app.use('/api/studio/structure',reconcileProjectStructure);
 
 registerMasterProjectRoutes(app as any);
 registerMasterProjectModuleRoutes(app as any);
