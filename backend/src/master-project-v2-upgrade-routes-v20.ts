@@ -12,6 +12,13 @@ async function mergeAllDuplicateMasterTasks(db:D1Database,masterId:string){
 
 async function extend(db:D1Database,masterId:string){await ensureContextSchema(db);await mergeAllDuplicateMasterTasks(db,masterId);await db.prepare("UPDATE master_projects SET version=CASE WHEN version<20 THEN 20 ELSE version END,updated_at=datetime('now') WHERE id=?").bind(masterId).run()}
 
-export async function ensureMasterV20(db:D1Database,masterId:string){const previous=await ensureMasterV19(db,masterId);await extend(db,masterId);return previous}
+export async function ensureMasterV20(db:D1Database,masterId:string){
+ const row=await db.prepare('SELECT version FROM master_projects WHERE id=?').bind(masterId).first<any>();
+ const version=Number(row?.version||0);
+ if(version<19)await ensureMasterV19(db,masterId);
+ const current=await db.prepare('SELECT version FROM master_projects WHERE id=?').bind(masterId).first<any>();
+ if(Number(current?.version||0)<20)await extend(db,masterId);
+ return current;
+}
 
-export function registerMasterProjectV2UpgradeRoutesV20(app:RouteApp){const proxy:RouteApp={post(path,handler){if(path!=='/api/studio/master-projects/upgrade-fritidshus-v2'){app.post(path,handler);return;}app.post(path,async c=>{const response:any=await handler(c);if(!response||typeof response.clone!=='function'||!response.ok)return response;const data:any=await response.clone().json().catch(()=>null);if(!data?.id)return response;await extend(c.env.DB,String(data.id));return c.json({...data,version:20},response.status)})}};registerMasterProjectV2UpgradeRoutesV19(proxy)}
+export function registerMasterProjectV2UpgradeRoutesV20(app:RouteApp){const proxy:RouteApp={post(path,handler){if(path!=='/api/studio/master-projects/upgrade-fritidshus-v2'){app.post(path,handler);return;}app.post(path,async c=>{const response:any=await handler(c);if(!response||typeof response.clone!=='function'||!response.ok)return response;const data:any=await response.clone().json().catch(()=>null);if(!data?.id)return response;const row=await c.env.DB.prepare('SELECT version FROM master_projects WHERE id=?').bind(String(data.id)).first<any>();if(Number(row?.version||0)<20)await extend(c.env.DB,String(data.id));return c.json({...data,version:20},response.status)})}};registerMasterProjectV2UpgradeRoutesV19(proxy)}
