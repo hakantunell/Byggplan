@@ -11,21 +11,7 @@ async function mergeMasterSection(db:D1Database,masterId:string){
   const source=await db.prepare(`SELECT ws.id FROM master_work_sections ws JOIN master_work_areas wa ON wa.id=ws.master_work_area_id WHERE wa.master_project_id=? AND lower(trim(ws.name))=lower('Vald stomtyp') ORDER BY ws.sort_order LIMIT 1`).bind(masterId).first<any>();
   if(!target||!source||String(target.id)===String(source.id))return;
 
-  const tasks=await db.prepare('SELECT id,title FROM master_tasks WHERE master_work_section_id=? ORDER BY sort_order').bind(source.id).all();
-  for(const task of tasks.results as any[]){
-    const same=await db.prepare('SELECT id FROM master_tasks WHERE master_work_section_id=? AND lower(trim(title))=lower(trim(?)) LIMIT 1').bind(target.id,String(task.title)).first<any>();
-    if(!same){
-      await db.prepare('UPDATE master_tasks SET master_work_section_id=? WHERE id=?').bind(target.id,task.id).run();
-      continue;
-    }
-    const activities=await db.prepare('SELECT id,title FROM master_activities WHERE master_task_id=? ORDER BY sort_order').bind(task.id).all();
-    for(const activity of activities.results as any[]){
-      const duplicate=await db.prepare('SELECT id FROM master_activities WHERE master_task_id=? AND lower(trim(title))=lower(trim(?)) LIMIT 1').bind(same.id,String(activity.title)).first<any>();
-      if(!duplicate)await db.prepare('UPDATE master_activities SET master_task_id=? WHERE id=?').bind(same.id,activity.id).run();
-      else await db.prepare(`INSERT INTO master_activity_contexts(master_activity_id,lifecycle_stage,surface,applicability,condition_text,updated_at) VALUES(?,'build','field','deprecated','Ersatt vid sammanslagning av stomstruktur.',datetime('now')) ON CONFLICT(master_activity_id) DO UPDATE SET applicability='deprecated',updated_at=datetime('now')`).bind(String(activity.id)).run();
-    }
-  }
-  await db.prepare('DELETE FROM master_tasks WHERE master_work_section_id=? AND NOT EXISTS(SELECT 1 FROM master_activities a WHERE a.master_task_id=master_tasks.id)').bind(source.id).run();
+  await db.prepare('UPDATE master_tasks SET master_work_section_id=? WHERE master_work_section_id=?').bind(target.id,source.id).run();
   await db.prepare('DELETE FROM master_work_sections WHERE id=? AND NOT EXISTS(SELECT 1 FROM master_tasks t WHERE t.master_work_section_id=master_work_sections.id)').bind(source.id).run();
 }
 
