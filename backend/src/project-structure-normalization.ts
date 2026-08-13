@@ -3,7 +3,7 @@ async function ensureContextSchema(db:D1Database){
 }
 
 async function deprecateActivity(db:D1Database,activityId:string,reason:string){
-  await db.prepare(`INSERT INTO activity_contexts(activity_id,lifecycle_stage,surface,applicability,condition_text,updated_at) VALUES(?,'build','field','deprecated',?,datetime('now')) ON CONFLICT(activity_id) DO UPDATE SET applicability='deprecated',condition_text=excluded.condition_text,updated_at=datetime('now')`).bind(activityId,reason).run();
+  await db.prepare(`INSERT INTO activity_contexts(activity_id,lifecycle_stage,surface,applicability,condition_text,updated_at) VALUES(?,'build','studio','deprecated',?,datetime('now')) ON CONFLICT(activity_id) DO UPDATE SET surface='studio',applicability='deprecated',condition_text=excluded.condition_text,updated_at=datetime('now')`).bind(activityId,reason).run();
 }
 
 async function preferSpecificTimberActivity(db:D1Database,projectId:string){
