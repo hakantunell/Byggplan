@@ -3,6 +3,7 @@ import { registerMasterProjectRoutes } from './master-project-routes';
 import { registerMasterProjectCloneRoutes } from './master-project-clone-routes';
 import { registerMasterProjectModuleRoutes } from './master-project-module-routes';
 import { ensureMasterV17, registerMasterProjectV2UpgradeRoutesV17 } from './master-project-v2-upgrade-routes-v17';
+import { normalizeProjectStructure } from './project-structure-normalization';
 import { registerProjectSupportAttachmentUploadRoutes } from './project-support-attachment-upload-routes';
 import { registerProjectSupportRoutes } from './project-support-routes';
 import { registerProjectSupportJsonUploadRoutes } from './project-support-json-upload-routes';
@@ -24,8 +25,19 @@ async function reconcileMaster(c:any,next:any){
   }
   await next();
 }
+
+async function reconcileProjectStructure(c:any,next:any){
+  if(c.req.method==='GET'){
+    const match=new URL(c.req.url).pathname.match(/^\/api\/(?:studio\/)?projects\/([^/]+)/);
+    if(match)await normalizeProjectStructure(c.env.DB,decodeURIComponent(match[1]));
+  }
+  await next();
+}
+
 app.use('/api/studio/master-projects',reconcileMaster);
 app.use('/api/studio/master-projects/*',reconcileMaster);
+app.use('/api/studio/projects/*',reconcileProjectStructure);
+app.use('/api/projects/*',reconcileProjectStructure);
 
 registerMasterProjectRoutes(app as any);
 registerMasterProjectModuleRoutes(app as any);
