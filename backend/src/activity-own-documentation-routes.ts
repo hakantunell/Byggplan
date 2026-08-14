@@ -22,10 +22,6 @@ export function registerActivityOwnDocumentationRoutes(app:RouteApp){
     }
     if(!existingTypes.has('photo')){
       inserts.push(c.env.DB.prepare(`INSERT INTO activity_documentation_fields(id,activity_id,field_type,label,help_text,required,minimum_items,maximum_items,sort_order) VALUES(?,?,?,?,?,0,NULL,NULL,?)`).bind(crypto.randomUUID(),activityId,'photo','Egna foton',`${MARKER} Frivilliga foton för eget bruk.`,order));
-      order+=10;
-    }
-    if(!existingTypes.has('file')){
-      inserts.push(c.env.DB.prepare(`INSERT INTO activity_documentation_fields(id,activity_id,field_type,label,help_text,required,minimum_items,maximum_items,sort_order) VALUES(?,?,?,?,?,0,NULL,NULL,?)`).bind(crypto.randomUUID(),activityId,'file','Egna filer',`${MARKER} Frivilliga filer för eget bruk.`,order));
     }
     if(inserts.length)await c.env.DB.batch(inserts);
     return c.json({ok:true,created:inserts.length});
