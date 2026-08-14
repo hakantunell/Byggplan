@@ -1,6 +1,6 @@
 type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void;put:(path:string,handler:(c:any)=>unknown)=>void;post:(path:string,handler:(c:any)=>unknown)=>void;delete:(path:string,handler:(c:any)=>unknown)=>void};
 
-function safeName(name:string){return name.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/-+/g,'-').replace(/^[-.]+|[-.]+$/g,'').slice(0,120)||'bild'}
+function safeName(name:string){return name.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/-+/g,'-').replace(/^[-.]+|[-.]+$/g,'').slice(0,120)||'fil'}
 function isFile(value:unknown):value is File{return Boolean(value&&typeof value==='object'&&typeof (value as any).stream==='function'&&typeof (value as any).size==='number')}
 
 async function ensureSchema(db:D1Database){
@@ -59,8 +59,9 @@ export function registerActivityOwnDocumentationRoutes(app:RouteApp){
     if(!isFile(upload)||upload.size<=0)return c.json({ok:false,error:'Ingen giltig fil valdes.'},400);
     if(upload.size>20*1024*1024)return c.json({ok:false,error:'Filen får vara högst 20 MB.'},413);
     const type=(upload as any).type||'';
-    if(!type.startsWith('image/'))return c.json({ok:false,error:'Endast bilder stöds här.'},415);
-    const id=crypto.randomUUID(),original=(upload as any).name||'bild.jpg';
+    const allowed=type.startsWith('image/')||type==='application/pdf';
+    if(!allowed)return c.json({ok:false,error:'Endast bilder och PDF-filer stöds här.'},415);
+    const id=crypto.randomUUID(),original=(upload as any).name||(type==='application/pdf'?'dokument.pdf':'bild.jpg');
     const key=`projects/${activity.project_id}/activity-own-documentation/${activityId}/${id}-${safeName(original)}`;
     await c.env.FILES.put(key,(upload as any).stream(),{httpMetadata:{contentType:type||'application/octet-stream'}});
     try{await c.env.DB.prepare('INSERT INTO activity_own_documentation_files(id,activity_id,object_key,original_name,content_type,size_bytes) VALUES(?,?,?,?,?,?)').bind(id,activityId,key,original,type,Number((upload as any).size||0)).run()}catch(error){await c.env.FILES.delete(key);throw error}
@@ -70,8 +71,8 @@ export function registerActivityOwnDocumentationRoutes(app:RouteApp){
   app.get('/api/activity-own-documentation-files/:id',async c=>{
     await ensureSchema(c.env.DB);
     const file=await c.env.DB.prepare('SELECT object_key,original_name,content_type FROM activity_own_documentation_files WHERE id=?').bind(c.req.param('id')).first<any>();
-    if(!file)return c.json({ok:false,error:'Bilden hittades inte.'},404);
-    const object=await c.env.FILES.get(file.object_key);if(!object)return c.json({ok:false,error:'Bildfilen saknas.'},404);
+    if(!file)return c.json({ok:false,error:'Filen hittades inte.'},404);
+    const object=await c.env.FILES.get(file.object_key);if(!object)return c.json({ok:false,error:'Filen saknas.'},404);
     const headers=new Headers();object.writeHttpMetadata(headers);headers.set('Content-Type',file.content_type||headers.get('Content-Type')||'application/octet-stream');headers.set('Content-Disposition',`inline; filename="${safeName(file.original_name)}"`);headers.set('Cache-Control','private, max-age=300');
     return new Response(object.body,{headers});
   });
@@ -79,7 +80,7 @@ export function registerActivityOwnDocumentationRoutes(app:RouteApp){
   app.delete('/api/activity-own-documentation-files/:id',async c=>{
     await ensureSchema(c.env.DB);
     const file=await c.env.DB.prepare('SELECT object_key FROM activity_own_documentation_files WHERE id=?').bind(c.req.param('id')).first<any>();
-    if(!file)return c.json({ok:false,error:'Bilden hittades inte.'},404);
+    if(!file)return c.json({ok:false,error:'Filen hittades inte.'},404);
     if(c.env.FILES)await c.env.FILES.delete(String(file.object_key));
     await c.env.DB.prepare('DELETE FROM activity_own_documentation_files WHERE id=?').bind(c.req.param('id')).run();
     return c.json({ok:true});
