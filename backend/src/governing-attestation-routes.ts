@@ -30,6 +30,19 @@ async function itemInProject(db:D1Database,projectId:string,itemId:string){
   return db.prepare(`SELECT i.id FROM governing_items i JOIN governing_documents d ON d.id=i.governing_document_id WHERE i.id=? AND d.project_id=?`).bind(itemId,projectId).first<any>();
 }
 
+async function completionForItem(db:D1Database,itemId:string){
+  const rows=await db.prepare(`
+    SELECT a.id,COALESCE(e.done,0) done,COALESCE(ac.applicability,'always') applicability
+    FROM governing_item_activity_links l
+    JOIN activities a ON a.id=l.activity_id
+    LEFT JOIN activity_entries e ON e.activity_id=a.id
+    LEFT JOIN activity_contexts ac ON ac.activity_id=a.id
+    WHERE l.governing_item_id=?
+  `).bind(itemId).all();
+  const active=(rows.results as any[]).filter(row=>String(row.applicability||'always')!=='deprecated');
+  return{activeCount:active.length,incompleteCount:active.filter(row=>!Boolean(row.done)).length};
+}
+
 export function registerGoverningAttestationRoutes(app:RouteApp){
   app.get('/api/studio/projects/:projectId/governing-attestations',async c=>{
     await ensureSchema(c.env.DB);
@@ -47,6 +60,9 @@ export function registerGoverningAttestationRoutes(app:RouteApp){
     await ensureSchema(c.env.DB);
     const projectId=String(c.req.param('projectId')),itemId=String(c.req.param('itemId'));
     if(!await itemInProject(c.env.DB,projectId,itemId))return c.json({ok:false,error:'Styrpunkten hittades inte i projektet.'},404);
+    const completion=await completionForItem(c.env.DB,itemId);
+    if(completion.activeCount===0)return c.json({ok:false,error:'Punkten kan inte attesteras eftersom den saknar en aktiv projektaktivitet som kan klarmarkeras.'},409);
+    if(completion.incompleteCount>0)return c.json({ok:false,error:'Punkten kan inte attesteras förrän alla kopplade aktiviteter är klarmarkerade.'},409);
     const user=await currentUser(c);if(!user)return c.json({ok:false,error:'Ingen aktiv användare.'},401);
     const body=await c.req.json<{roleCode?:string;attestationType?:string}>().catch(()=>({}));
     const roleCode=String(body.roleCode||'').trim().toUpperCase();
