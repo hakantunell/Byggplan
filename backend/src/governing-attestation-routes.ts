@@ -26,6 +26,12 @@ async function currentUser(c:any){
   return c.env.DB.prepare("SELECT id,email,display_name,status FROM users WHERE email=? AND status='active'").bind(email).first<any>();
 }
 
+async function attestationRoles(db:D1Database,userId:string,projectId:string){
+  const rows=await db.prepare('SELECT role_code FROM project_member_roles WHERE user_id=? AND project_id=?').bind(userId,projectId).all();
+  const explicit=(rows.results as any[]).map(row=>String(row.role_code||'').trim().toUpperCase()).filter(role=>role==='BH'||role==='KA');
+  return explicit.length?[...new Set(explicit)]:['BH'];
+}
+
 async function itemInProject(db:D1Database,projectId:string,itemId:string){
   return db.prepare(`SELECT i.id FROM governing_items i JOIN governing_documents d ON d.id=i.governing_document_id WHERE i.id=? AND d.project_id=?`).bind(itemId,projectId).first<any>();
 }
@@ -69,13 +75,14 @@ export function registerGoverningAttestationRoutes(app:RouteApp){
   app.get('/api/studio/projects/:projectId/governing-attestations',async c=>{
     await ensureSchema(c.env.DB);
     const projectId=String(c.req.param('projectId'));
+    const user=await currentUser(c);
     const rows=await c.env.DB.prepare(`
       SELECT id,governing_item_id,user_id,signer_name,signer_email,role_code,attestation_type,signing_method,signed_at
       FROM governing_item_attestations
       WHERE project_id=?
       ORDER BY governing_item_id,signed_at,id
     `).bind(projectId).all();
-    return c.json({ok:true,attestations:rows.results,eligibility:await eligibilityForProject(c.env.DB,projectId)});
+    return c.json({ok:true,attestations:rows.results,eligibility:await eligibilityForProject(c.env.DB,projectId),attestationRoles:user?await attestationRoles(c.env.DB,String(user.id),projectId):[]});
   });
 
   app.post('/api/studio/projects/:projectId/governing-items/:itemId/attest',async c=>{
@@ -87,9 +94,10 @@ export function registerGoverningAttestationRoutes(app:RouteApp){
     if(completion.incompleteCount>0)return c.json({ok:false,error:'Punkten kan inte attesteras förrän alla kopplade aktiviteter är klarmarkerade.'},409);
     const user=await currentUser(c);if(!user)return c.json({ok:false,error:'Ingen aktiv användare.'},401);
     const body=await c.req.json<{roleCode?:string;attestationType?:string}>().catch(()=>({}));
-    const roleCode=String(body.roleCode||'').trim().toUpperCase();
+    const permittedRoles=await attestationRoles(c.env.DB,String(user.id),projectId);
+    const roleCode=String(body.roleCode||permittedRoles[0]||'').trim().toUpperCase();
     const attestationType=String(body.attestationType||'approved').trim().toLowerCase();
-    if(!roleCode)return c.json({ok:false,error:'Ange roll för attesten.'},400);
+    if(!permittedRoles.includes(roleCode))return c.json({ok:false,error:`Du är inte behörig att attestera som ${roleCode||'den valda rollen'}.`},403);
     if(!['approved','checked','performed'].includes(attestationType))return c.json({ok:false,error:'Ogiltig attesttyp.'},400);
     const duplicate=await c.env.DB.prepare(`SELECT id,signed_at FROM governing_item_attestations WHERE project_id=? AND governing_item_id=? AND user_id=? AND role_code=? AND attestation_type=? ORDER BY signed_at DESC LIMIT 1`).bind(projectId,itemId,user.id,roleCode,attestationType).first<any>();
     if(duplicate)return c.json({ok:false,error:'Samma användare har redan attesterat punkten med denna roll och attesttyp.',existing:duplicate},409);
