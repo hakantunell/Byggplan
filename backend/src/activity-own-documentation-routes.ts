@@ -41,13 +41,48 @@ export function registerActivityOwnDocumentationRoutes(app:RouteApp){
   app.get('/api/projects/:projectId/activity-documentation-summary',async c=>{
     await ensureSchema(c.env.DB);
     const projectId=String(c.req.param('projectId'));
-    const activities=await c.env.DB.prepare(`SELECT a.id,a.title,a.activity_type FROM activities a JOIN tasks t ON t.id=a.task_id JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id WHERE wa.project_id=? ORDER BY a.id`).bind(projectId).all();
-    const ids=(activities.results as any[]).map(row=>String(row.id));
-    if(!ids.length)return c.json({ok:true,items:[]});
-    const marks=ids.map(()=>'?').join(',');
-    const ownNotes=await c.env.DB.prepare(`SELECT activity_id,note,updated_at FROM activity_own_documentation WHERE activity_id IN (${marks})`).bind(...ids).all();
-    const ownFiles=await c.env.DB.prepare(`SELECT id,activity_id,original_name,content_type,size_bytes,created_at FROM activity_own_documentation_files WHERE activity_id IN (${marks}) ORDER BY activity_id,created_at,id`).bind(...ids).all();
-    const fields=await c.env.DB.prepare(`SELECT f.id,f.activity_id,f.field_type,f.label,f.unit,f.required,e.id AS entry_id,e.value_text,e.value_number,e.value_boolean,e.original_name,e.content_type,e.created_at FROM activity_documentation_fields f LEFT JOIN activity_documentation_entries e ON e.field_id=f.id WHERE f.activity_id IN (${marks}) ORDER BY f.activity_id,f.sort_order,e.created_at`).bind(...ids).all();
+    const activities=await c.env.DB.prepare(`
+      SELECT a.id,a.title,a.activity_type
+      FROM activities a
+      JOIN tasks t ON t.id=a.task_id
+      JOIN work_sections ws ON ws.id=t.work_section_id
+      JOIN work_areas wa ON wa.id=ws.work_area_id
+      WHERE wa.project_id=?
+      ORDER BY a.id
+    `).bind(projectId).all();
+    if(!(activities.results as any[]).length)return c.json({ok:true,items:[]});
+    const ownNotes=await c.env.DB.prepare(`
+      SELECT d.activity_id,d.note,d.updated_at
+      FROM activity_own_documentation d
+      JOIN activities a ON a.id=d.activity_id
+      JOIN tasks t ON t.id=a.task_id
+      JOIN work_sections ws ON ws.id=t.work_section_id
+      JOIN work_areas wa ON wa.id=ws.work_area_id
+      WHERE wa.project_id=?
+    `).bind(projectId).all();
+    const ownFiles=await c.env.DB.prepare(`
+      SELECT f.id,f.activity_id,f.original_name,f.content_type,f.size_bytes,f.created_at
+      FROM activity_own_documentation_files f
+      JOIN activities a ON a.id=f.activity_id
+      JOIN tasks t ON t.id=a.task_id
+      JOIN work_sections ws ON ws.id=t.work_section_id
+      JOIN work_areas wa ON wa.id=ws.work_area_id
+      WHERE wa.project_id=?
+      ORDER BY f.activity_id,f.created_at,f.id
+    `).bind(projectId).all();
+    const fields=await c.env.DB.prepare(`
+      SELECT f.id,f.activity_id,f.field_type,f.label,f.unit,f.required,
+             e.id AS entry_id,e.value_text,e.value_number,e.value_boolean,
+             e.original_name,e.content_type,e.created_at
+      FROM activity_documentation_fields f
+      JOIN activities a ON a.id=f.activity_id
+      JOIN tasks t ON t.id=a.task_id
+      JOIN work_sections ws ON ws.id=t.work_section_id
+      JOIN work_areas wa ON wa.id=ws.work_area_id
+      LEFT JOIN activity_documentation_entries e ON e.field_id=f.id
+      WHERE wa.project_id=?
+      ORDER BY f.activity_id,f.sort_order,e.created_at
+    `).bind(projectId).all();
     const byActivity=new Map<string,any>();
     for(const row of activities.results as any[])byActivity.set(String(row.id),{activityId:String(row.id),activityTitle:String(row.title||''),activityType:String(row.activity_type||''),note:'',ownFiles:[],requiredFields:[]});
     for(const row of ownNotes.results as any[]){const item=byActivity.get(String(row.activity_id));if(item)item.note=String(row.note||'')}
