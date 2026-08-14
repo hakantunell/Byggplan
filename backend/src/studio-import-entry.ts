@@ -4,10 +4,12 @@ import { registerGoverningDocumentRoutes } from './governing-document-routes';
 import { registerGoverningVerificationRoutesV2 } from './governing-verification-routes-v2';
 import { registerGoverningMappingRoutesV3 } from './governing-mapping-routes-v3';
 import { registerProjectDocumentRoutes } from './project-document-routes';
+import { registerProjectDocumentAnnotationRoutes } from './project-document-annotation-routes';
 import { registerProjectAdministrationRoutes } from './project-administration-routes';
 import { registerProjectManagementRoutes } from './project-management-routes';
 
 const IMPORT_RUNTIME_VERSION = '2026-08-11-v16';
+const ANNOTATION_RUNTIME_VERSION = '2026-08-14-v3';
 
 type ImportClassification = { category?: string; code?: string; label?: string; source?: string };
 type ImportActivity = { title?: string; description?: string; type?: string; classifications?: ImportClassification[] };
@@ -38,6 +40,7 @@ async function insertClassifications(db: D1Database, activityId: string, classif
 }
 
 app.get('/api/studio/import-version', c => c.json({ ok: true, version: IMPORT_RUNTIME_VERSION }));
+app.get('/api/project-document-annotations-version', c => c.json({ ok: true, version: ANNOTATION_RUNTIME_VERSION }));
 app.get('/api/studio/activities/:id/classifications', async c => {
   await ensureClassificationSchema(c.env.DB); const activityId=c.req.param('id'); const activity=await c.env.DB.prepare('SELECT id FROM activities WHERE id=?').bind(activityId).first();
   if(!activity)return c.json({ok:false,error:'Aktiviteten hittades inte.'},404);
@@ -82,6 +85,7 @@ registerGoverningDocumentRoutes(app as any);
 registerGoverningVerificationRoutesV2(app as any);
 registerGoverningMappingRoutesV3(app as any);
 registerProjectDocumentRoutes(app as any);
+registerProjectDocumentAnnotationRoutes(app as any);
 registerProjectAdministrationRoutes(app as any);
 registerProjectManagementRoutes(app as any);
 
