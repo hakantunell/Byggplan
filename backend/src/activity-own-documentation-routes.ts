@@ -38,6 +38,24 @@ export function registerActivityOwnDocumentationRoutes(app:RouteApp){
     return c.json({ok:true,note:String(row?.note||''),updatedAt:row?.updated_at||null,files:(files.results as any[]).map(file=>({id:file.id,originalName:file.original_name,contentType:file.content_type,sizeBytes:Number(file.size_bytes||0),createdAt:file.created_at,url:`/api/activity-own-documentation-files/${encodeURIComponent(file.id)}`}))});
   });
 
+  app.get('/api/projects/:projectId/activity-documentation-summary',async c=>{
+    await ensureSchema(c.env.DB);
+    const projectId=String(c.req.param('projectId'));
+    const activities=await c.env.DB.prepare(`SELECT a.id,a.title,a.activity_type FROM activities a JOIN tasks t ON t.id=a.task_id JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id WHERE wa.project_id=? ORDER BY a.id`).bind(projectId).all();
+    const ids=(activities.results as any[]).map(row=>String(row.id));
+    if(!ids.length)return c.json({ok:true,items:[]});
+    const marks=ids.map(()=>'?').join(',');
+    const ownNotes=await c.env.DB.prepare(`SELECT activity_id,note,updated_at FROM activity_own_documentation WHERE activity_id IN (${marks})`).bind(...ids).all();
+    const ownFiles=await c.env.DB.prepare(`SELECT id,activity_id,original_name,content_type,size_bytes,created_at FROM activity_own_documentation_files WHERE activity_id IN (${marks}) ORDER BY activity_id,created_at,id`).bind(...ids).all();
+    const fields=await c.env.DB.prepare(`SELECT f.id,f.activity_id,f.field_type,f.label,f.unit,f.required,e.id AS entry_id,e.value_text,e.value_number,e.value_boolean,e.original_name,e.content_type,e.created_at FROM activity_documentation_fields f LEFT JOIN activity_documentation_entries e ON e.field_id=f.id WHERE f.activity_id IN (${marks}) ORDER BY f.activity_id,f.sort_order,e.created_at`).bind(...ids).all();
+    const byActivity=new Map<string,any>();
+    for(const row of activities.results as any[])byActivity.set(String(row.id),{activityId:String(row.id),activityTitle:String(row.title||''),activityType:String(row.activity_type||''),note:'',ownFiles:[],requiredFields:[]});
+    for(const row of ownNotes.results as any[]){const item=byActivity.get(String(row.activity_id));if(item)item.note=String(row.note||'')}
+    for(const row of ownFiles.results as any[]){const item=byActivity.get(String(row.activity_id));if(item)item.ownFiles.push({id:row.id,originalName:row.original_name,contentType:row.content_type,sizeBytes:Number(row.size_bytes||0),createdAt:row.created_at,url:`/api/activity-own-documentation-files/${encodeURIComponent(row.id)}`})}
+    for(const row of fields.results as any[]){const item=byActivity.get(String(row.activity_id));if(!item)continue;let field=item.requiredFields.find((x:any)=>x.id===row.id);if(!field){field={id:row.id,type:row.field_type,label:row.label,unit:row.unit||'',required:Boolean(row.required),entries:[]};item.requiredFields.push(field)}if(row.entry_id)field.entries.push({id:row.entry_id,valueText:row.value_text??null,valueNumber:row.value_number??null,valueBoolean:row.value_boolean==null?null:Boolean(row.value_boolean),originalName:row.original_name??null,contentType:row.content_type??null,createdAt:row.created_at,url:row.original_name?`/api/activity-documentation-entries/${encodeURIComponent(row.entry_id)}`:null})}
+    return c.json({ok:true,items:[...byActivity.values()].filter((item:any)=>item.note.trim()||item.ownFiles.length||item.requiredFields.some((field:any)=>field.entries.length))});
+  });
+
   app.put('/api/activities/:id/own-documentation',async c=>{
     await ensureSchema(c.env.DB);
     const id=String(c.req.param('id'));
@@ -59,8 +77,7 @@ export function registerActivityOwnDocumentationRoutes(app:RouteApp){
     if(!isFile(upload)||upload.size<=0)return c.json({ok:false,error:'Ingen giltig fil valdes.'},400);
     if(upload.size>20*1024*1024)return c.json({ok:false,error:'Filen får vara högst 20 MB.'},413);
     const type=(upload as any).type||'';
-    const allowed=type.startsWith('image/')||type==='application/pdf';
-    if(!allowed)return c.json({ok:false,error:'Endast bilder och PDF-filer stöds här.'},415);
+    if(!type.startsWith('image/')&&type!=='application/pdf')return c.json({ok:false,error:'Endast bilder och PDF stöds här.'},415);
     const id=crypto.randomUUID(),original=(upload as any).name||(type==='application/pdf'?'dokument.pdf':'bild.jpg');
     const key=`projects/${activity.project_id}/activity-own-documentation/${activityId}/${id}-${safeName(original)}`;
     await c.env.FILES.put(key,(upload as any).stream(),{httpMetadata:{contentType:type||'application/octet-stream'}});
@@ -74,6 +91,14 @@ export function registerActivityOwnDocumentationRoutes(app:RouteApp){
     if(!file)return c.json({ok:false,error:'Filen hittades inte.'},404);
     const object=await c.env.FILES.get(file.object_key);if(!object)return c.json({ok:false,error:'Filen saknas.'},404);
     const headers=new Headers();object.writeHttpMetadata(headers);headers.set('Content-Type',file.content_type||headers.get('Content-Type')||'application/octet-stream');headers.set('Content-Disposition',`inline; filename="${safeName(file.original_name)}"`);headers.set('Cache-Control','private, max-age=300');
+    return new Response(object.body,{headers});
+  });
+
+  app.get('/api/activity-documentation-entries/:id',async c=>{
+    const file=await c.env.DB.prepare('SELECT object_key,original_name,content_type FROM activity_documentation_entries WHERE id=? AND object_key IS NOT NULL').bind(c.req.param('id')).first<any>();
+    if(!file)return c.json({ok:false,error:'Underlaget hittades inte.'},404);
+    const object=await c.env.FILES.get(file.object_key);if(!object)return c.json({ok:false,error:'Underlagsfilen saknas.'},404);
+    const headers=new Headers();object.writeHttpMetadata(headers);headers.set('Content-Type',file.content_type||headers.get('Content-Type')||'application/octet-stream');headers.set('Content-Disposition',`inline; filename="${safeName(file.original_name||'underlag')}"`);headers.set('Cache-Control','private, max-age=300');
     return new Response(object.body,{headers});
   });
 
