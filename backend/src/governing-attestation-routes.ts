@@ -43,6 +43,28 @@ async function completionForItem(db:D1Database,itemId:string){
   return{activeCount:active.length,incompleteCount:active.filter(row=>!Boolean(row.done)).length};
 }
 
+async function eligibilityForProject(db:D1Database,projectId:string){
+  const rows=await db.prepare(`
+    SELECT i.id governing_item_id,a.id activity_id,COALESCE(e.done,0) done,COALESCE(ac.applicability,'always') applicability
+    FROM governing_items i
+    JOIN governing_documents d ON d.id=i.governing_document_id
+    LEFT JOIN governing_item_activity_links l ON l.governing_item_id=i.id
+    LEFT JOIN activities a ON a.id=l.activity_id
+    LEFT JOIN activity_entries e ON e.activity_id=a.id
+    LEFT JOIN activity_contexts ac ON ac.activity_id=a.id
+    WHERE d.project_id=?
+  `).bind(projectId).all();
+  const grouped=new Map<string,{activeCount:number;incompleteCount:number}>();
+  for(const row of rows.results as any[]){
+    const id=String(row.governing_item_id);const state=grouped.get(id)||{activeCount:0,incompleteCount:0};
+    if(row.activity_id&&String(row.applicability||'always')!=='deprecated'){
+      state.activeCount+=1;if(!Boolean(row.done))state.incompleteCount+=1;
+    }
+    grouped.set(id,state);
+  }
+  return Object.fromEntries([...grouped.entries()].map(([id,state])=>[id,{...state,canAttest:state.activeCount>0&&state.incompleteCount===0}]));
+}
+
 export function registerGoverningAttestationRoutes(app:RouteApp){
   app.get('/api/studio/projects/:projectId/governing-attestations',async c=>{
     await ensureSchema(c.env.DB);
@@ -53,7 +75,7 @@ export function registerGoverningAttestationRoutes(app:RouteApp){
       WHERE project_id=?
       ORDER BY governing_item_id,signed_at,id
     `).bind(projectId).all();
-    return c.json({ok:true,attestations:rows.results});
+    return c.json({ok:true,attestations:rows.results,eligibility:await eligibilityForProject(c.env.DB,projectId)});
   });
 
   app.post('/api/studio/projects/:projectId/governing-items/:itemId/attest',async c=>{
