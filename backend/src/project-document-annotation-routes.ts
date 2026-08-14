@@ -1,6 +1,6 @@
 type RouteApp = {
   get: (path: string, handler: (c: any) => unknown) => void;
-  post: (path: string, handler: (c: any) => unknown) => void;
+  put: (path: string, handler: (c: any) => unknown) => void;
 };
 
 function sanitizeFileName(name: string) {
@@ -65,7 +65,7 @@ export function registerProjectDocumentAnnotationRoutes(app:RouteApp){
     return c.json({ok:true,annotations:await annotationPayload(c.env.DB,documentId)});
   });
 
-  app.post('/api/project-document-annotations',async c=>{
+  app.put('/api/project-document-annotations',async c=>{
     await ensureSchema(c.env.DB);
     const body=await c.req.json<{documentId?:string;pageNumber?:number;x?:number;y?:number}>().catch(()=>({}));
     const documentId=typeof body.documentId==='string'?body.documentId:'';const pageNumber=Math.max(1,Math.floor(Number(body.pageNumber)||1));const x=Number(body.x),y=Number(body.y);
@@ -75,14 +75,14 @@ export function registerProjectDocumentAnnotationRoutes(app:RouteApp){
     return c.json({ok:true,id},201);
   });
 
-  app.post('/api/project-document-annotations/:id/notes',async c=>{
+  app.put('/api/project-document-annotations/:id/notes',async c=>{
     await ensureSchema(c.env.DB);const annotationId=c.req.param('id');const body=await c.req.json<{note?:string}>().catch(()=>({}));const note=typeof body.note==='string'?body.note.trim():'';
     if(!note)return c.json({ok:false,error:'Notisen är tom.'},400);
     const exists=await c.env.DB.prepare('SELECT id FROM project_document_annotations WHERE id=?').bind(annotationId).first();if(!exists)return c.json({ok:false,error:'Markeringen hittades inte.'},404);
     const id=crypto.randomUUID();await c.env.DB.prepare('INSERT INTO project_document_annotation_notes(id,annotation_id,note) VALUES(?,?,?)').bind(id,annotationId,note).run();return c.json({ok:true,id},201);
   });
 
-  app.post('/api/project-document-annotations/:id/photos',async c=>{
+  app.put('/api/project-document-annotations/:id/photos',async c=>{
     await ensureSchema(c.env.DB);const annotationId=c.req.param('id');const annotation=await c.env.DB.prepare('SELECT id,project_id,document_id FROM project_document_annotations WHERE id=?').bind(annotationId).first<any>();if(!annotation)return c.json({ok:false,error:'Markeringen hittades inte.'},404);
     let form:FormData;try{form=await c.req.raw.formData()}catch{return c.json({ok:false,error:'Kunde inte läsa bilden.'},400)}
     const upload=form.get('file');if(!isUploadedFile(upload)||!upload.type.startsWith('image/'))return c.json({ok:false,error:'Välj en giltig bild.'},415);if(upload.size<=0)return c.json({ok:false,error:'Bilden är tom.'},400);if(upload.size>20*1024*1024)return c.json({ok:false,error:'Bilden får vara högst 20 MB.'},413);
