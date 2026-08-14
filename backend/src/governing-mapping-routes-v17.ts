@@ -20,7 +20,44 @@ type ReviewedCreateBody={
   taskTitle?:string;
 };
 
+const EXCEPTIONS=new Set(['not_applicable','cannot_verify','alternative_evidence']);
 function clean(value:unknown){return String(value||'').trim();}
+
+function normalizeDeprecatedMappings(data:any){
+  if(!data||!Array.isArray(data.items)||!Array.isArray(data.activities))return data;
+  const activeIds=new Set<string>(data.activities.filter((activity:any)=>String(activity.applicability||'always')!=='deprecated').map((activity:any)=>String(activity.id)));
+  for(const item of data.items){
+    const originalIds=Array.isArray(item.mapped_activity_ids)?item.mapped_activity_ids.map((id:unknown)=>String(id)):[];
+    const validIds=originalIds.filter((id:string)=>activeIds.has(id));
+    const staleIds=originalIds.filter((id:string)=>!activeIds.has(id));
+    item.mapped_activity_ids=validIds;
+    item.mapped_activity_count=validIds.length;
+    item.stale_mapped_activity_ids=staleIds;
+    item.stale_mapped_activity_count=staleIds.length;
+    item.mapping_needs_repair=validIds.length===0&&staleIds.length>0;
+  }
+  const documents=Array.isArray(data.documents)?data.documents:[];
+  for(const document of documents){
+    const rows=data.items.filter((item:any)=>String(item.governing_document_id)===String(document.id));
+    const exceptionCount=rows.filter((item:any)=>EXCEPTIONS.has(String(item.handling_status||''))).length;
+    const projectConditionCount=rows.filter((item:any)=>item.project_condition&&String(item.handling_status||'')==='handled').length;
+    const mappedCount=rows.filter((item:any)=>!EXCEPTIONS.has(String(item.handling_status||''))&&!(item.project_condition&&String(item.handling_status||'')==='handled')&&Number(item.mapped_activity_count||0)>0).length;
+    const uncoveredCount=rows.filter((item:any)=>!EXCEPTIONS.has(String(item.handling_status||''))&&!(item.project_condition&&String(item.handling_status||'')==='handled')&&Number(item.mapped_activity_count||0)===0).length;
+    const repairCount=rows.filter((item:any)=>Boolean(item.mapping_needs_repair)).length;
+    const coveredCount=mappedCount+exceptionCount+projectConditionCount;
+    Object.assign(document,{item_count:rows.length,mapped_count:mappedCount,exception_count:exceptionCount,project_condition_count:projectConditionCount,uncovered_count:uncoveredCount,repair_count:repairCount,covered_count:coveredCount,coverage_percent:rows.length?Math.round(coveredCount*100/rows.length):100});
+  }
+  const itemCount=documents.reduce((sum:number,d:any)=>sum+Number(d.item_count||0),0);
+  const mappedCount=documents.reduce((sum:number,d:any)=>sum+Number(d.mapped_count||0),0);
+  const exceptionCount=documents.reduce((sum:number,d:any)=>sum+Number(d.exception_count||0),0);
+  const projectConditionCount=documents.reduce((sum:number,d:any)=>sum+Number(d.project_condition_count||0),0);
+  const uncoveredCount=documents.reduce((sum:number,d:any)=>sum+Number(d.uncovered_count||0),0);
+  const repairCount=documents.reduce((sum:number,d:any)=>sum+Number(d.repair_count||0),0);
+  const coveredCount=mappedCount+exceptionCount+projectConditionCount;
+  data.summary={...(data.summary||{}),item_count:itemCount,mapped_count:mappedCount,exception_count:exceptionCount,project_condition_count:projectConditionCount,covered_count:coveredCount,uncovered_count:uncoveredCount,repair_count:repairCount,coverage_percent:itemCount?Math.round(coveredCount*100/itemCount):100};
+  data.runtime='mapping-v17';
+  return data;
+}
 
 async function governingItem(db:D1Database,projectId:string,itemId:string){
   return db.prepare(`
@@ -74,8 +111,8 @@ async function createReviewed(db:D1Database,projectId:string,item:any,body:Revie
   if(!['perform','check','measurement','document'].includes(activityType))throw new Error('Ogiltig aktivitetstyp.');
   if(!['existing_task','new_task','new_section','new_area'].includes(mode))throw new Error('Ogiltigt placeringsval.');
 
-  const existing=await db.prepare('SELECT activity_id FROM governing_item_activity_links WHERE governing_item_id=? LIMIT 1').bind(item.id).first<any>();
-  if(existing)throw new Error('Styrposten är redan kopplad till en aktivitet.');
+  const existing=await db.prepare(`SELECT l.activity_id FROM governing_item_activity_links l LEFT JOIN activity_contexts ac ON ac.activity_id=l.activity_id WHERE l.governing_item_id=? AND COALESCE(ac.applicability,'always')<>'deprecated' LIMIT 1`).bind(item.id).first<any>();
+  if(existing)throw new Error('Styrposten är redan kopplad till en aktiv aktivitet.');
 
   let areaId=clean(body.areaId),sectionId=clean(body.sectionId),taskId=clean(body.taskId);
   let areaName=clean(body.areaName),sectionName=clean(body.sectionName),taskTitle=clean(body.taskTitle);
@@ -157,5 +194,19 @@ export function registerGoverningMappingRoutesV17(app:RouteApp){
     catch(error){return c.json({ok:false,error:error instanceof Error?error.message:String(error)},409);}
   });
 
-  registerGoverningMappingRoutesV16(app);
+  const proxy:RouteApp={
+    get(path,handler){
+      if(path!=='/api/studio/projects/:projectId/governing-mapping'){app.get(path,handler);return;}
+      app.get(path,async c=>{
+        const response:any=await handler(c);
+        if(!response||typeof response.clone!=='function'||!response.ok)return response;
+        const data:any=await response.clone().json().catch(()=>null);
+        if(!data)return response;
+        return c.json(normalizeDeprecatedMappings(data),response.status);
+      });
+    },
+    put(path,handler){app.put(path,handler);},
+    post(path,handler){app.post(path,handler);}
+  };
+  registerGoverningMappingRoutesV16(proxy);
 }
