@@ -10,6 +10,11 @@ async function userProfile(c:any,user:any){
  return{id:user.id,email:user.email,displayName:user.display_name,globalRoles:(global.results as any[]).map(r=>String(r.role_code)),projects:(memberships.results as any[]).map(r=>({id:String(r.project_id),name:String(r.project_name),roles:byProject.get(String(r.project_id))||[]}))};
 }
 
+async function ensureProjectRoleCatalog(db:D1Database){
+ await db.prepare(`INSERT OR IGNORE INTO roles(code,name,description) VALUES('BH','Byggherre','Projektets byggherre och ansvarig för byggherrekontroller.')`).run();
+ await db.prepare(`INSERT OR IGNORE INTO roles(code,name,description) VALUES('KA','Kontrollansvarig','Projektets kontrollansvarige med behörighet att KA-signera kontrollplanen.')`).run();
+}
+
 export function registerAuthRoutes(app:RouteApp){
  app.get('/api/auth/status',async c=>{await ensureAuthSchema(c.env.DB);const row=await c.env.DB.prepare('SELECT COUNT(*) count FROM user_credentials').first<any>();return c.json({ok:true,configured:Number(row?.count||0)>0});});
  app.get('/api/auth/me',async c=>{const user=await sessionUser(c);if(!user)return c.json({ok:false,authenticated:false},401);return c.json({ok:true,authenticated:true,user:await userProfile(c,user)});});
@@ -21,6 +26,9 @@ export function registerAuthRoutes(app:RouteApp){
   const password=String(body.password||'');if(password.length<10)return c.json({ok:false,error:'Lösenordet måste vara minst 10 tecken.'},400);
   const email=String(c.env.DEV_USER_EMAIL||'').trim();const user=await c.env.DB.prepare("SELECT id,email,display_name,status FROM users WHERE email=? AND status='active'").bind(email).first<any>();if(!user)return c.json({ok:false,error:'Bootstrap-användaren hittades inte.'},404);
   const h=await hashPassword(password);await c.env.DB.prepare(`INSERT INTO user_credentials(user_id,password_salt,password_hash,iterations) VALUES(?,?,?,?)`).bind(user.id,h.salt,h.hash,h.iterations).run();
+  await ensureProjectRoleCatalog(c.env.DB);
+  const memberships=await c.env.DB.prepare("SELECT project_id FROM project_memberships WHERE user_id=? AND status='active'").bind(user.id).all();
+  for(const row of memberships.results as any[])await c.env.DB.prepare(`INSERT OR IGNORE INTO project_member_roles(project_id,user_id,role_code) VALUES(?,?, 'BH')`).bind(String(row.project_id),String(user.id)).run();
   const cookie=await createSession(c,String(user.id));c.header('Set-Cookie',cookie);return c.json({ok:true,user:await userProfile(c,user)},201);
  });
  app.post('/api/auth/login',async c=>{
