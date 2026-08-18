@@ -46,20 +46,14 @@ export async function verifyPassword(password:string,saltBase64:string,expectedH
  if(a.length!==b.length)return false;let diff=0;for(let i=0;i<a.length;i++)diff|=a[i]^b[i];return diff===0;
 }
 
-function cookieValue(c:any){const raw=String(c.req.header('Cookie')||'');for(const part of raw.split(';')){const [name,...rest]=part.trim().split('=');if(name===COOKIE)return decodeURIComponent(rest.join('='))}return''}
+function cookieFromRequest(request:Request){const raw=String(request.headers.get('Cookie')||'');for(const part of raw.split(';')){const [name,...rest]=part.trim().split('=');if(name===COOKIE)return decodeURIComponent(rest.join('='))}return''}
 
-export async function sessionUser(c:any):Promise<AuthUser|null>{
- const token=cookieValue(c);if(!token)return null;
- try{
-  const tokenHash=await sha256(token);
-  const user=await c.env.DB.prepare(`SELECT u.id,u.email,u.display_name,u.status,s.id session_id
-    FROM auth_sessions s JOIN users u ON u.id=s.user_id
-    WHERE s.token_hash=? AND s.expires_at>datetime('now') AND u.status='active'`).bind(tokenHash).first<any>();
-  if(!user)return null;
-  c.executionCtx?.waitUntil?.(c.env.DB.prepare("UPDATE auth_sessions SET last_seen_at=datetime('now') WHERE id=?").bind(user.session_id).run());
-  return{id:String(user.id),email:String(user.email),display_name:String(user.display_name),status:String(user.status)};
- }catch{return null}
+export async function sessionUserFromRequest(db:D1Database,request:Request):Promise<AuthUser|null>{
+ const token=cookieFromRequest(request);if(!token)return null;
+ try{const tokenHash=await sha256(token);const user=await db.prepare(`SELECT u.id,u.email,u.display_name,u.status FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>datetime('now') AND u.status='active'`).bind(tokenHash).first<any>();return user?{id:String(user.id),email:String(user.email),display_name:String(user.display_name),status:String(user.status)}:null}catch{return null}
 }
+
+export async function sessionUser(c:any):Promise<AuthUser|null>{return sessionUserFromRequest(c.env.DB,c.req.raw)}
 
 export async function createSession(c:any,userId:string){
  await ensureAuthSchema(c.env.DB);
@@ -70,6 +64,6 @@ export async function createSession(c:any,userId:string){
 }
 
 export async function clearSession(c:any){
- const token=cookieValue(c);if(token){try{await c.env.DB.prepare('DELETE FROM auth_sessions WHERE token_hash=?').bind(await sha256(token)).run()}catch{}}
+ const token=cookieFromRequest(c.req.raw);if(token){try{await c.env.DB.prepare('DELETE FROM auth_sessions WHERE token_hash=?').bind(await sha256(token)).run()}catch{}}
  return`${COOKIE}=; Path=/; Domain=.byggplan.tunell.org; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
 }
