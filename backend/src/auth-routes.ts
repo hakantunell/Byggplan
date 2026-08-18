@@ -16,7 +16,7 @@ async function ensureProjectRoleCatalog(db:D1Database){
 }
 
 export function registerAuthRoutes(app:RouteApp){
- app.get('/api/auth/status',async c=>{await ensureAuthSchema(c.env.DB);const row=await c.env.DB.prepare('SELECT COUNT(*) count FROM user_credentials').first<any>();return c.json({ok:true,configured:Number(row?.count||0)>0});});
+ app.get('/api/auth/status',async c=>{await ensureAuthSchema(c.env.DB);const row=await c.env.DB.prepare('SELECT COUNT(*) count FROM user_credentials').first<any>();return c.json({ok:true,configured:Number(row?.count||0)>0,bootstrapReady:Boolean(String(c.env.AUTH_BOOTSTRAP_TOKEN||'').trim())});});
  app.get('/api/auth/me',async c=>{const user=await sessionUser(c);if(!user)return c.json({ok:false,authenticated:false},401);return c.json({ok:true,authenticated:true,user:await userProfile(c,user)});});
  app.post('/api/auth/bootstrap',async c=>{
   await ensureAuthSchema(c.env.DB);
