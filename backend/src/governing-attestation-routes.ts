@@ -1,169 +1,59 @@
-type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void;post:(path:string,handler:(c:any)=>unknown)=>void};
+import {sessionUser,verifyPassword} from './auth-session';
 
-type AttestationRow={governing_item_id:string;role_code:string;attestation_type:string};
+type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void;post:(path:string,handler:(c:any)=>unknown)=>void};
+type AttestationRow={governing_item_id:string;role_code:string;attestation_type:string;content_hash?:string|null};
 type AvailableAttestation={roleCode:string;attestationType:'control'|'ka_review';label:string};
 
+async function addColumn(db:D1Database,sql:string){try{await db.prepare(sql).run()}catch(error){if(!/duplicate column/i.test(String(error)))throw error}}
 async function ensureSchema(db:D1Database){
-  await db.prepare(`CREATE TABLE IF NOT EXISTS governing_item_attestations(
-    id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
-    governing_item_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    signer_name TEXT NOT NULL,
-    signer_email TEXT NOT NULL DEFAULT '',
-    role_code TEXT NOT NULL,
-    attestation_type TEXT NOT NULL DEFAULT 'approved',
-    signing_method TEXT NOT NULL DEFAULT 'byggplan_internal',
-    signed_at TEXT NOT NULL DEFAULT (datetime('now')),
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
-    FOREIGN KEY(governing_item_id) REFERENCES governing_items(id) ON DELETE CASCADE
-  )`).run();
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_governing_attestations_project_item ON governing_item_attestations(project_id,governing_item_id,signed_at)').run();
+ await db.prepare(`CREATE TABLE IF NOT EXISTS governing_item_attestations(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,governing_item_id TEXT NOT NULL,user_id TEXT NOT NULL,signer_name TEXT NOT NULL,signer_email TEXT NOT NULL DEFAULT '',role_code TEXT NOT NULL,attestation_type TEXT NOT NULL DEFAULT 'approved',signing_method TEXT NOT NULL DEFAULT 'byggplan_internal',signed_at TEXT NOT NULL DEFAULT (datetime('now')),created_at TEXT NOT NULL DEFAULT (datetime('now')),FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,FOREIGN KEY(governing_item_id) REFERENCES governing_items(id) ON DELETE CASCADE)`).run();
+ await addColumn(db,'ALTER TABLE governing_item_attestations ADD COLUMN content_hash TEXT');
+ await addColumn(db,'ALTER TABLE governing_item_attestations ADD COLUMN content_hash_version INTEGER NOT NULL DEFAULT 1');
+ await db.prepare('CREATE INDEX IF NOT EXISTS idx_governing_attestations_project_item ON governing_item_attestations(project_id,governing_item_id,signed_at)').run();
 }
 
-async function currentUser(c:any){
-  const requested=String(c.req.header('X-Demo-User')||'').trim();
-  const email=requested||String(c.env.DEV_USER_EMAIL||'').trim();
-  if(!email)return null;
-  return c.env.DB.prepare("SELECT id,email,display_name,status FROM users WHERE email=? AND status='active'").bind(email).first<any>();
+async function currentUser(c:any){return sessionUser(c)}
+async function attestationRoles(db:D1Database,userId:string,projectId:string){const rows=await db.prepare('SELECT role_code FROM project_member_roles WHERE user_id=? AND project_id=?').bind(userId,projectId).all();const explicit=(rows.results as any[]).map(row=>String(row.role_code||'').trim().toUpperCase()).filter(role=>role==='BH'||role==='KA');return[...new Set(explicit)]}
+function controllerRoles(value:unknown){const upper=String(value||'').trim().toLocaleUpperCase('sv-SE');const hasKa=/(^|[^A-ZÅÄÖ])KA([^A-ZÅÄÖ]|$)|KONTROLLANSVARIG/.test(upper),hasBh=/(^|[^A-ZÅÄÖ])BH([^A-ZÅÄÖ]|$)|BYGGHERRE/.test(upper),hasEk=/(^|[^A-ZÅÄÖ])EK([^A-ZÅÄÖ]|$)|EGENKONTROLL/.test(upper);if((hasBh||hasEk)&&!hasKa)return['BH'];if(hasKa&&!hasBh&&!hasEk)return['KA'];if(hasBh||hasEk)return['BH'];if(hasKa)return['KA'];return['BH']}
+function isControlPlan(documentTitle:unknown,documentType:unknown){return/kontrollplan/i.test(`${String(documentTitle||'')} ${String(documentType||'')}`)}
+function normalizedType(row:AttestationRow){return String(row.attestation_type||'').toLowerCase()==='ka_review'?'ka_review':'control'}
+async function itemInProject(db:D1Database,projectId:string,itemId:string){return db.prepare(`SELECT i.id,i.code,i.description,i.responsible_role,i.evidence_required,i.handling_status,d.id document_id,d.title document_title,d.document_type FROM governing_items i JOIN governing_documents d ON d.id=i.governing_document_id WHERE i.id=? AND d.project_id=?`).bind(itemId,projectId).first<any>()}
+async function completionForItem(db:D1Database,itemId:string){const rows=await db.prepare(`SELECT a.id,COALESCE(e.done,0) done,COALESCE(ac.applicability,'always') applicability FROM governing_item_activity_links l JOIN activities a ON a.id=l.activity_id LEFT JOIN activity_entries e ON e.activity_id=a.id LEFT JOIN activity_contexts ac ON ac.activity_id=a.id WHERE l.governing_item_id=?`).bind(itemId).all();const active=(rows.results as any[]).filter(row=>String(row.applicability||'always')!=='deprecated');return{activeCount:active.length,incompleteCount:active.filter(row=>!Boolean(row.done)).length}}
+
+function stable(value:any):any{if(Array.isArray(value))return value.map(stable);if(value&&typeof value==='object'){const out:any={};for(const key of Object.keys(value).sort())out[key]=stable(value[key]);return out}return value}
+async function sha256Text(value:string){const bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)));return[...bytes].map(b=>b.toString(16).padStart(2,'0')).join('')}
+async function evidenceFingerprint(db:D1Database,projectId:string,itemId:string){
+ const item=await itemInProject(db,projectId,itemId);if(!item)return'';
+ const activities=await db.prepare(`SELECT a.id,a.title,a.activity_type,COALESCE(ac.applicability,'always') applicability,COALESCE(e.done,0) done,e.value,e.completed_by,e.completed_at FROM governing_item_activity_links l JOIN activities a ON a.id=l.activity_id LEFT JOIN activity_contexts ac ON ac.activity_id=a.id LEFT JOIN activity_entries e ON e.activity_id=a.id WHERE l.governing_item_id=? ORDER BY a.id`).bind(itemId).all();
+ const activeIds=(activities.results as any[]).filter(r=>String(r.applicability||'always')!=='deprecated').map(r=>String(r.id));
+ let formal:any[]=[];let own:any[]=[];let ownFiles:any[]=[];
+ if(activeIds.length){
+  const placeholders=activeIds.map(()=>'?').join(',');
+  const f=await db.prepare(`SELECT f.activity_id,f.id field_id,f.field_type,f.label,f.unit,f.required,e.id entry_id,e.value_text,e.value_number,e.value_boolean,e.object_key,e.original_name,e.content_type,e.note,e.created_at FROM activity_documentation_fields f LEFT JOIN activity_documentation_entries e ON e.field_id=f.id WHERE f.activity_id IN (${placeholders}) ORDER BY f.activity_id,f.sort_order,f.id,e.created_at,e.id`).bind(...activeIds).all();formal=f.results as any[];
+  try{const n=await db.prepare(`SELECT activity_id,note,updated_at FROM activity_own_documentation WHERE activity_id IN (${placeholders}) ORDER BY activity_id`).bind(...activeIds).all();own=n.results as any[]}catch{}
+  try{const ff=await db.prepare(`SELECT id,activity_id,object_key,original_name,content_type,size_bytes,created_at FROM activity_own_documentation_files WHERE activity_id IN (${placeholders}) ORDER BY activity_id,created_at,id`).bind(...activeIds).all();ownFiles=ff.results as any[]}catch{}
+ }
+ const payload={version:1,item:{id:item.id,code:item.code||'',description:item.description||'',responsibleRole:item.responsible_role||'',evidenceRequired:item.evidence_required||'',handlingStatus:item.handling_status||'',documentId:item.document_id,documentTitle:item.document_title||''},activities:(activities.results as any[]).filter(r=>String(r.applicability||'always')!=='deprecated'),formal,own,ownFiles};
+ return sha256Text(JSON.stringify(stable(payload)));
 }
 
-async function attestationRoles(db:D1Database,userId:string,projectId:string){
-  const rows=await db.prepare('SELECT role_code FROM project_member_roles WHERE user_id=? AND project_id=?').bind(userId,projectId).all();
-  const explicit=(rows.results as any[]).map(row=>String(row.role_code||'').trim().toUpperCase()).filter(role=>role==='BH'||role==='KA');
-  return [...new Set(explicit)];
-}
-
-function controllerRoles(value:unknown){
-  const upper=String(value||'').trim().toLocaleUpperCase('sv-SE');
-  const hasKa=/(^|[^A-ZÅÄÖ])KA([^A-ZÅÄÖ]|$)|KONTROLLANSVARIG/.test(upper);
-  const hasBh=/(^|[^A-ZÅÄÖ])BH([^A-ZÅÄÖ]|$)|BYGGHERRE/.test(upper);
-  const hasEk=/(^|[^A-ZÅÄÖ])EK([^A-ZÅÄÖ]|$)|EGENKONTROLL/.test(upper);
-  if((hasBh||hasEk)&&!hasKa)return['BH'];
-  if(hasKa&&!hasBh&&!hasEk)return['KA'];
-  if(hasBh||hasEk)return['BH'];
-  if(hasKa)return['KA'];
-  return['BH'];
-}
-
-function isControlPlan(documentTitle:unknown,documentType:unknown){
-  return /kontrollplan/i.test(`${String(documentTitle||'')} ${String(documentType||'')}`);
-}
-
-function normalizedType(row:AttestationRow){
-  const type=String(row.attestation_type||'').toLowerCase();
-  return type==='ka_review'?'ka_review':'control';
-}
-
-async function itemInProject(db:D1Database,projectId:string,itemId:string){
-  return db.prepare(`SELECT i.id,i.responsible_role,d.title document_title,d.document_type FROM governing_items i JOIN governing_documents d ON d.id=i.governing_document_id WHERE i.id=? AND d.project_id=?`).bind(itemId,projectId).first<any>();
-}
-
-async function completionForItem(db:D1Database,itemId:string){
-  const rows=await db.prepare(`
-    SELECT a.id,COALESCE(e.done,0) done,COALESCE(ac.applicability,'always') applicability
-    FROM governing_item_activity_links l
-    JOIN activities a ON a.id=l.activity_id
-    LEFT JOIN activity_entries e ON e.activity_id=a.id
-    LEFT JOIN activity_contexts ac ON ac.activity_id=a.id
-    WHERE l.governing_item_id=?
-  `).bind(itemId).all();
-  const active=(rows.results as any[]).filter(row=>String(row.applicability||'always')!=='deprecated');
-  return{activeCount:active.length,incompleteCount:active.filter(row=>!Boolean(row.done)).length};
-}
-
-function attestationProgress(itemId:string,controller:string[],requiresKaReview:boolean,attestations:AttestationRow[]){
-  const rows=attestations.filter(row=>String(row.governing_item_id)===itemId);
-  const controlRoles=[...new Set(rows.filter(row=>normalizedType(row)==='control').map(row=>String(row.role_code||'').toUpperCase()))];
-  const controlMissing=controller.filter(role=>!controlRoles.includes(role));
-  const controlComplete=controlMissing.length===0;
-  const kaReviewDone=rows.some(row=>normalizedType(row)==='ka_review'&&String(row.role_code||'').toUpperCase()==='KA');
-  return{controlRoles,controlMissing,controlComplete,kaReviewDone,requiresKaReview};
-}
-
+function attestationProgress(itemId:string,controller:string[],requiresKaReview:boolean,attestations:AttestationRow[]){const rows=attestations.filter(row=>String(row.governing_item_id)===itemId);const controlRoles=[...new Set(rows.filter(row=>normalizedType(row)==='control').map(row=>String(row.role_code||'').toUpperCase()))];const controlMissing=controller.filter(role=>!controlRoles.includes(role));const controlComplete=controlMissing.length===0;const kaReviewDone=rows.some(row=>normalizedType(row)==='ka_review'&&String(row.role_code||'').toUpperCase()==='KA');return{controlRoles,controlMissing,controlComplete,kaReviewDone,requiresKaReview}}
 async function eligibilityForProject(db:D1Database,projectId:string,attestations:AttestationRow[],userRoles:string[]){
-  const rows=await db.prepare(`
-    SELECT i.id governing_item_id,i.responsible_role,d.title document_title,d.document_type,a.id activity_id,COALESCE(e.done,0) done,COALESCE(ac.applicability,'always') applicability
-    FROM governing_items i
-    JOIN governing_documents d ON d.id=i.governing_document_id
-    LEFT JOIN governing_item_activity_links l ON l.governing_item_id=i.id
-    LEFT JOIN activities a ON a.id=l.activity_id
-    LEFT JOIN activity_entries e ON e.activity_id=a.id
-    LEFT JOIN activity_contexts ac ON ac.activity_id=a.id
-    WHERE d.project_id=?
-  `).bind(projectId).all();
-  const grouped=new Map<string,{activeCount:number;incompleteCount:number;responsibleRole:string;documentTitle:string;documentType:string}>();
-  for(const row of rows.results as any[]){
-    const id=String(row.governing_item_id);const state=grouped.get(id)||{activeCount:0,incompleteCount:0,responsibleRole:String(row.responsible_role||''),documentTitle:String(row.document_title||''),documentType:String(row.document_type||'')};
-    if(row.activity_id&&String(row.applicability||'always')!=='deprecated'){
-      state.activeCount+=1;if(!Boolean(row.done))state.incompleteCount+=1;
-    }
-    grouped.set(id,state);
-  }
-  return Object.fromEntries([...grouped.entries()].map(([id,state])=>{
-    const controller=controllerRoles(state.responsibleRole);
-    const requiresKaReview=isControlPlan(state.documentTitle,state.documentType);
-    const progress=attestationProgress(id,controller,requiresKaReview,attestations);
-    const performed=state.activeCount>0&&state.incompleteCount===0;
-    const availableAttestations:AvailableAttestation[]=[];
-    if(performed&&!progress.controlComplete){
-      for(const role of userRoles.filter(role=>progress.controlMissing.includes(role)))availableAttestations.push({roleCode:role,attestationType:'control',label:`Kontrollintyg som ${role}`});
-    }else if(performed&&progress.controlComplete&&requiresKaReview&&!progress.kaReviewDone&&userRoles.includes('KA')){
-      availableAttestations.push({roleCode:'KA',attestationType:'ka_review',label:'KA-signering'});
-    }
-    const fullyAttested=performed&&progress.controlComplete&&(!requiresKaReview||progress.kaReviewDone);
-    return[id,{...state,performed,controllerRoles:controller,controlAttestedRoles:progress.controlRoles,missingControllerRoles:progress.controlMissing,controlComplete:progress.controlComplete,requiresKaReview,kaReviewDone:progress.kaReviewDone,fullyAttested,canAttest:availableAttestations.length>0,availableAttestations}]
-  }));
+ const rows=await db.prepare(`SELECT i.id governing_item_id,i.responsible_role,d.title document_title,d.document_type,a.id activity_id,COALESCE(e.done,0) done,COALESCE(ac.applicability,'always') applicability FROM governing_items i JOIN governing_documents d ON d.id=i.governing_document_id LEFT JOIN governing_item_activity_links l ON l.governing_item_id=i.id LEFT JOIN activities a ON a.id=l.activity_id LEFT JOIN activity_entries e ON e.activity_id=a.id LEFT JOIN activity_contexts ac ON ac.activity_id=a.id WHERE d.project_id=?`).bind(projectId).all();
+ const grouped=new Map<string,{activeCount:number;incompleteCount:number;responsibleRole:string;documentTitle:string;documentType:string}>();for(const row of rows.results as any[]){const id=String(row.governing_item_id),state=grouped.get(id)||{activeCount:0,incompleteCount:0,responsibleRole:String(row.responsible_role||''),documentTitle:String(row.document_title||''),documentType:String(row.document_type||'')};if(row.activity_id&&String(row.applicability||'always')!=='deprecated'){state.activeCount++;if(!Boolean(row.done))state.incompleteCount++}grouped.set(id,state)}
+ const result:Record<string,any>={};
+ for(const[id,state]of grouped){const currentHash=await evidenceFingerprint(db,projectId,id);const itemRows=attestations.filter(a=>String(a.governing_item_id)===id);const validRows=itemRows.filter(a=>!a.content_hash||a.content_hash===currentHash);const staleCount=itemRows.filter(a=>Boolean(a.content_hash)&&a.content_hash!==currentHash).length;const controller=controllerRoles(state.responsibleRole),requiresKaReview=isControlPlan(state.documentTitle,state.documentType),progress=attestationProgress(id,controller,requiresKaReview,validRows),performed=state.activeCount>0&&state.incompleteCount===0,availableAttestations:AvailableAttestation[]=[];if(performed&&!progress.controlComplete){for(const role of userRoles.filter(role=>progress.controlMissing.includes(role)))availableAttestations.push({roleCode:role,attestationType:'control',label:`Kontrollintyg som ${role}`})}else if(performed&&progress.controlComplete&&requiresKaReview&&!progress.kaReviewDone&&userRoles.includes('KA'))availableAttestations.push({roleCode:'KA',attestationType:'ka_review',label:'KA-signering'});const fullyAttested=performed&&progress.controlComplete&&(!requiresKaReview||progress.kaReviewDone);result[id]={...state,performed,controllerRoles:controller,controlAttestedRoles:progress.controlRoles,missingControllerRoles:progress.controlMissing,controlComplete:progress.controlComplete,requiresKaReview,kaReviewDone:progress.kaReviewDone,fullyAttested,canAttest:availableAttestations.length>0,availableAttestations,contentHash:currentHash,staleAttestationCount:staleCount}}
+ return result;
 }
 
 export function registerGoverningAttestationRoutes(app:RouteApp){
-  app.get('/api/studio/projects/:projectId/governing-attestations',async c=>{
-    await ensureSchema(c.env.DB);
-    const projectId=String(c.req.param('projectId'));
-    const user=await currentUser(c);
-    const userRoles=user?await attestationRoles(c.env.DB,String(user.id),projectId):[];
-    const rows=await c.env.DB.prepare(`
-      SELECT id,governing_item_id,user_id,signer_name,signer_email,role_code,attestation_type,signing_method,signed_at
-      FROM governing_item_attestations
-      WHERE project_id=?
-      ORDER BY governing_item_id,signed_at,id
-    `).bind(projectId).all();
-    const attestations=rows.results as any[];
-    return c.json({ok:true,attestations,eligibility:await eligibilityForProject(c.env.DB,projectId,attestations as AttestationRow[],userRoles),attestationRoles:userRoles});
-  });
-
-  app.post('/api/studio/projects/:projectId/governing-items/:itemId/attest',async c=>{
-    await ensureSchema(c.env.DB);
-    const projectId=String(c.req.param('projectId')),itemId=String(c.req.param('itemId'));
-    const item=await itemInProject(c.env.DB,projectId,itemId);
-    if(!item)return c.json({ok:false,error:'Styrpunkten hittades inte i projektet.'},404);
-    const completion=await completionForItem(c.env.DB,itemId);
-    if(completion.activeCount===0)return c.json({ok:false,error:'Kontrollen är inte genomförd eftersom punkten saknar en aktiv projektaktivitet.'},409);
-    if(completion.incompleteCount>0)return c.json({ok:false,error:'Kontrollen måste vara genomförd innan den kan signeras.'},409);
-    const user=await currentUser(c);if(!user)return c.json({ok:false,error:'Ingen aktiv användare.'},401);
-    const body=await c.req.json<{roleCode?:string;attestationType?:string}>().catch(()=>({}));
-    const permittedRoles=await attestationRoles(c.env.DB,String(user.id),projectId);
-    const roleCode=String(body.roleCode||'').trim().toUpperCase();
-    const requestedType=String(body.attestationType||'control').trim().toLowerCase();
-    const attestationType=requestedType==='ka_review'?'ka_review':'control';
-    if(!permittedRoles.includes(roleCode))return c.json({ok:false,error:`Du är inte behörig att signera som ${roleCode||'den valda rollen'}.`},403);
-    const existingRows=await c.env.DB.prepare(`SELECT governing_item_id,role_code,attestation_type FROM governing_item_attestations WHERE project_id=? AND governing_item_id=?`).bind(projectId,itemId).all();
-    const existing=existingRows.results as AttestationRow[];
-    const controller=controllerRoles(item.responsible_role);
-    const requiresKaReview=isControlPlan(item.document_title,item.document_type);
-    const progress=attestationProgress(itemId,controller,requiresKaReview,existing);
-    if(attestationType==='control'){
-      if(!controller.includes(roleCode))return c.json({ok:false,error:`Kontrollpunkten ska inte kontrollsigneras av ${roleCode}.`},403);
-      if(!progress.controlMissing.includes(roleCode))return c.json({ok:false,error:`Kontrollintyget är redan signerat som ${roleCode}.`},409);
-    }else{
-      if(roleCode!=='KA'||!requiresKaReview)return c.json({ok:false,error:'Den här punkten har ingen separat KA-signering.'},403);
-      if(!progress.controlComplete)return c.json({ok:false,error:'Kontrollintyget måste vara klart innan KA kan slutkvittera punkten.'},409);
-      if(progress.kaReviewDone)return c.json({ok:false,error:'KA-signeringen är redan gjord.'},409);
-    }
-    const id=crypto.randomUUID();
-    await c.env.DB.prepare(`INSERT INTO governing_item_attestations(id,project_id,governing_item_id,user_id,signer_name,signer_email,role_code,attestation_type,signing_method,signed_at,created_at) VALUES(?,?,?,?,?,?,?,?, 'byggplan_internal',datetime('now'),datetime('now'))`).bind(id,projectId,itemId,String(user.id),String(user.display_name||user.email),String(user.email||''),roleCode,attestationType).run();
-    const created=await c.env.DB.prepare(`SELECT id,governing_item_id,user_id,signer_name,signer_email,role_code,attestation_type,signing_method,signed_at FROM governing_item_attestations WHERE id=?`).bind(id).first<any>();
-    return c.json({ok:true,attestation:created},201);
-  });
+ app.get('/api/studio/projects/:projectId/governing-attestations',async c=>{await ensureSchema(c.env.DB);const projectId=String(c.req.param('projectId')),user=await currentUser(c),userRoles=user?await attestationRoles(c.env.DB,String(user.id),projectId):[];const rows=await c.env.DB.prepare(`SELECT id,governing_item_id,user_id,signer_name,signer_email,role_code,attestation_type,signing_method,signed_at,content_hash,content_hash_version FROM governing_item_attestations WHERE project_id=? ORDER BY governing_item_id,signed_at,id`).bind(projectId).all();const attestations=rows.results as any[];return c.json({ok:true,attestations,eligibility:await eligibilityForProject(c.env.DB,projectId,attestations as AttestationRow[],userRoles),attestationRoles:userRoles})});
+ app.post('/api/studio/projects/:projectId/governing-items/:itemId/attest',async c=>{
+  await ensureSchema(c.env.DB);const projectId=String(c.req.param('projectId')),itemId=String(c.req.param('itemId')),item=await itemInProject(c.env.DB,projectId,itemId);if(!item)return c.json({ok:false,error:'Styrpunkten hittades inte i projektet.'},404);const completion=await completionForItem(c.env.DB,itemId);if(completion.activeCount===0)return c.json({ok:false,error:'Kontrollen är inte genomförd eftersom punkten saknar en aktiv projektaktivitet.'},409);if(completion.incompleteCount>0)return c.json({ok:false,error:'Kontrollen måste vara genomförd innan den kan signeras.'},409);
+  const user=await currentUser(c);if(!user)return c.json({ok:false,error:'Du måste vara inloggad för att signera.'},401);const body=await c.req.json<{roleCode?:string;attestationType?:string;password?:string}>().catch(()=>({}));const credential=await c.env.DB.prepare('SELECT password_salt,password_hash,iterations FROM user_credentials WHERE user_id=?').bind(user.id).first<any>();if(!credential)return c.json({ok:false,error:'Användaren saknar aktiv inloggning och kan inte signera.'},403);const password=String(body.password||'');if(!password)return c.json({ok:false,error:'Bekräfta signeringen med ditt lösenord.'},400);if(!await verifyPassword(password,String(credential.password_salt),String(credential.password_hash),Number(credential.iterations||100000)))return c.json({ok:false,error:'Fel lösenord. Signeringen genomfördes inte.'},403);
+  const permittedRoles=await attestationRoles(c.env.DB,String(user.id),projectId),roleCode=String(body.roleCode||'').trim().toUpperCase(),attestationType=String(body.attestationType||'control').trim().toLowerCase()==='ka_review'?'ka_review':'control';if(!permittedRoles.includes(roleCode))return c.json({ok:false,error:`Du är inte behörig att signera som ${roleCode||'den valda rollen'}.`},403);
+  const currentHash=await evidenceFingerprint(c.env.DB,projectId,itemId);const existingRows=await c.env.DB.prepare(`SELECT governing_item_id,role_code,attestation_type,content_hash FROM governing_item_attestations WHERE project_id=? AND governing_item_id=?`).bind(projectId,itemId).all();const existing=(existingRows.results as AttestationRow[]).filter(row=>!row.content_hash||row.content_hash===currentHash),controller=controllerRoles(item.responsible_role),requiresKaReview=isControlPlan(item.document_title,item.document_type),progress=attestationProgress(itemId,controller,requiresKaReview,existing);
+  if(attestationType==='control'){if(!controller.includes(roleCode))return c.json({ok:false,error:`Kontrollpunkten ska inte kontrollsigneras av ${roleCode}.`},403);if(!progress.controlMissing.includes(roleCode))return c.json({ok:false,error:`Kontrollintyget är redan signerat som ${roleCode}.`},409)}else{if(roleCode!=='KA'||!requiresKaReview)return c.json({ok:false,error:'Den här punkten har ingen separat KA-signering.'},403);if(!progress.controlComplete)return c.json({ok:false,error:'Kontrollintyget måste vara klart innan KA kan slutkvittera punkten.'},409);if(progress.kaReviewDone)return c.json({ok:false,error:'KA-signeringen är redan gjord.'},409)}
+  const id=crypto.randomUUID();await c.env.DB.prepare(`INSERT INTO governing_item_attestations(id,project_id,governing_item_id,user_id,signer_name,signer_email,role_code,attestation_type,signing_method,content_hash,content_hash_version,signed_at,created_at) VALUES(?,?,?,?,?,?,?,?, 'password_reauth_sha256',?,1,datetime('now'),datetime('now'))`).bind(id,projectId,itemId,String(user.id),String(user.display_name||user.email),String(user.email||''),roleCode,attestationType,currentHash).run();const created=await c.env.DB.prepare(`SELECT id,governing_item_id,user_id,signer_name,signer_email,role_code,attestation_type,signing_method,signed_at,content_hash,content_hash_version FROM governing_item_attestations WHERE id=?`).bind(id).first<any>();return c.json({ok:true,attestation:created},201)
+ });
 }
