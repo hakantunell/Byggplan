@@ -1,6 +1,7 @@
 export type AuthUser={id:string;email:string;display_name:string;status:string};
 const COOKIE='bp_session';
 const SESSION_DAYS=14;
+const PASSWORD_ITERATIONS=100000;
 
 function bytesToHex(bytes:Uint8Array){return [...bytes].map(b=>b.toString(16).padStart(2,'0')).join('')}
 function bytesToBase64(bytes:Uint8Array){let s='';for(const b of bytes)s+=String.fromCharCode(b);return btoa(s)}
@@ -12,7 +13,7 @@ export async function ensureAuthSchema(db:D1Database){
    user_id TEXT PRIMARY KEY,
    password_salt TEXT NOT NULL,
    password_hash TEXT NOT NULL,
-   iterations INTEGER NOT NULL DEFAULT 210000,
+   iterations INTEGER NOT NULL DEFAULT 100000,
    created_at TEXT NOT NULL DEFAULT (datetime('now')),
    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -33,7 +34,8 @@ export async function authConfigured(db:D1Database){
  try{const row=await db.prepare('SELECT COUNT(*) count FROM user_credentials').first<any>();return Number(row?.count||0)>0}catch{return false}
 }
 
-export async function hashPassword(password:string,salt?:Uint8Array,iterations=210000){
+export async function hashPassword(password:string,salt?:Uint8Array,iterations=PASSWORD_ITERATIONS){
+ if(iterations<1||iterations>PASSWORD_ITERATIONS)throw new Error(`Ogiltigt PBKDF2-iterationsantal: ${iterations}. Maximalt ${PASSWORD_ITERATIONS} stöds.`);
  const actualSalt=salt||crypto.getRandomValues(new Uint8Array(16));
  const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);
  const bits=await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:actualSalt,iterations},key,256);
