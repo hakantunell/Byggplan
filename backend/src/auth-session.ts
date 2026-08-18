@@ -29,6 +29,10 @@ export async function ensureAuthSchema(db:D1Database){
  await db.prepare('CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id,expires_at)').run();
 }
 
+export async function authConfigured(db:D1Database){
+ try{const row=await db.prepare('SELECT COUNT(*) count FROM user_credentials').first<any>();return Number(row?.count||0)>0}catch{return false}
+}
+
 export async function hashPassword(password:string,salt?:Uint8Array,iterations=210000){
  const actualSalt=salt||crypto.getRandomValues(new Uint8Array(16));
  const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);
