@@ -1,6 +1,7 @@
 import {clearSession,createSession,ensureAuthSchema,hashPassword,sessionUser,verifyPassword} from './auth-session';
 
-type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void;post:(path:string,handler:(c:any)=>unknown)=>void};
+type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void;post:(path:string,handler:(c:any)=>unknown)=>void;put:(path:string,handler:(c:any)=>unknown)=>void};
+const MEMBER_ROLES=new Set(['BH','KA','worker','supervisor']);
 
 async function userProfile(c:any,user:any){
  const global=await c.env.DB.prepare('SELECT role_code FROM global_user_roles WHERE user_id=? ORDER BY role_code').bind(user.id).all();
@@ -14,6 +15,8 @@ async function ensureProjectRoleCatalog(db:D1Database){
  await db.prepare(`INSERT OR IGNORE INTO roles(code,name,description) VALUES('BH','Byggherre','Projektets byggherre och ansvarig för byggherrekontroller.')`).run();
  await db.prepare(`INSERT OR IGNORE INTO roles(code,name,description) VALUES('KA','Kontrollansvarig','Projektets kontrollansvarige med behörighet att KA-signera kontrollplanen.')`).run();
 }
+async function requireAdmin(c:any){const user=await sessionUser(c);if(!user)return null;const role=await c.env.DB.prepare("SELECT 1 ok FROM global_user_roles WHERE user_id=? AND role_code='admin'").bind(user.id).first();return role?user:null}
+function normalizedRoles(value:unknown){return [...new Set((Array.isArray(value)?value:[]).map(v=>String(v).trim()).filter(v=>MEMBER_ROLES.has(v)))]}
 
 export function registerAuthRoutes(app:RouteApp){
  app.get('/api/auth/status',async c=>{await ensureAuthSchema(c.env.DB);const row=await c.env.DB.prepare('SELECT COUNT(*) count FROM user_credentials').first<any>();return c.json({ok:true,configured:Number(row?.count||0)>0,bootstrapReady:Boolean(String(c.env.AUTH_BOOTSTRAP_TOKEN||'').trim())});});
@@ -38,4 +41,23 @@ export function registerAuthRoutes(app:RouteApp){
   await c.env.DB.prepare("DELETE FROM auth_sessions WHERE expires_at<=datetime('now')").run();const cookie=await createSession(c,String(row.id));c.header('Set-Cookie',cookie);return c.json({ok:true,user:await userProfile(c,row)});
  });
  app.post('/api/auth/logout',async c=>{c.header('Set-Cookie',await clearSession(c));return c.json({ok:true});});
+
+ app.get('/api/studio/projects/:projectId/members',async c=>{
+  if(!await requireAdmin(c))return c.json({ok:false,error:'Administratörsbehörighet krävs.'},403);await ensureAuthSchema(c.env.DB);await ensureProjectRoleCatalog(c.env.DB);const projectId=String(c.req.param('projectId'));
+  const rows=await c.env.DB.prepare(`SELECT u.id,u.email,u.display_name,u.status,pm.status membership_status,CASE WHEN cr.user_id IS NULL THEN 0 ELSE 1 END has_login FROM project_memberships pm JOIN users u ON u.id=pm.user_id LEFT JOIN user_credentials cr ON cr.user_id=u.id WHERE pm.project_id=? ORDER BY u.display_name,u.email`).bind(projectId).all();
+  const roles=await c.env.DB.prepare('SELECT user_id,role_code FROM project_member_roles WHERE project_id=? ORDER BY user_id,role_code').bind(projectId).all();const byUser=new Map<string,string[]>();for(const r of roles.results as any[]){const list=byUser.get(String(r.user_id))||[];list.push(String(r.role_code));byUser.set(String(r.user_id),list)}
+  return c.json({ok:true,members:(rows.results as any[]).map(r=>({id:String(r.id),email:String(r.email),displayName:String(r.display_name),status:String(r.membership_status),hasLogin:Boolean(r.has_login),roles:byUser.get(String(r.id))||[]})),availableRoles:[{code:'BH',name:'Byggherre'},{code:'KA',name:'Kontrollansvarig'},{code:'worker',name:'Arbetare'},{code:'supervisor',name:'Arbetsledare'}]});
+ });
+ app.post('/api/studio/projects/:projectId/members',async c=>{
+  if(!await requireAdmin(c))return c.json({ok:false,error:'Administratörsbehörighet krävs.'},403);await ensureAuthSchema(c.env.DB);await ensureProjectRoleCatalog(c.env.DB);const projectId=String(c.req.param('projectId'));const body=await c.req.json<{email?:string;displayName?:string;password?:string;roles?:string[]}>().catch(()=>({}));
+  const email=String(body.email||'').trim().toLowerCase(),displayName=String(body.displayName||'').trim(),password=String(body.password||''),roles=normalizedRoles(body.roles);if(!email||!displayName)return c.json({ok:false,error:'Namn och e-post krävs.'},400);if(password&&password.length<10)return c.json({ok:false,error:'Lösenordet måste vara minst 10 tecken.'},400);
+  let user=await c.env.DB.prepare('SELECT id FROM users WHERE lower(email)=?').bind(email).first<any>();const userId=user?String(user.id):crypto.randomUUID();if(!user)await c.env.DB.prepare(`INSERT INTO users(id,email,display_name,status) VALUES(?,?,?,'active')`).bind(userId,email,displayName).run();else await c.env.DB.prepare("UPDATE users SET display_name=?,status='active',updated_at=datetime('now') WHERE id=?").bind(displayName,userId).run();
+  await c.env.DB.prepare(`INSERT INTO project_memberships(project_id,user_id,status) VALUES(?,?,'active') ON CONFLICT(project_id,user_id) DO UPDATE SET status='active',updated_at=datetime('now')`).bind(projectId,userId).run();await c.env.DB.prepare('DELETE FROM project_member_roles WHERE project_id=? AND user_id=?').bind(projectId,userId).run();for(const role of roles)await c.env.DB.prepare('INSERT INTO project_member_roles(project_id,user_id,role_code) VALUES(?,?,?)').bind(projectId,userId,role).run();
+  if(password){const h=await hashPassword(password);await c.env.DB.prepare(`INSERT INTO user_credentials(user_id,password_salt,password_hash,iterations,updated_at) VALUES(?,?,?,?,datetime('now')) ON CONFLICT(user_id) DO UPDATE SET password_salt=excluded.password_salt,password_hash=excluded.password_hash,iterations=excluded.iterations,updated_at=datetime('now')`).bind(userId,h.salt,h.hash,h.iterations).run();await c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id=?').bind(userId).run()}
+  return c.json({ok:true,userId},201);
+ });
+ app.put('/api/studio/projects/:projectId/members/:userId',async c=>{
+  if(!await requireAdmin(c))return c.json({ok:false,error:'Administratörsbehörighet krävs.'},403);await ensureProjectRoleCatalog(c.env.DB);const projectId=String(c.req.param('projectId')),userId=String(c.req.param('userId'));const body=await c.req.json<{displayName?:string;password?:string;roles?:string[]}>().catch(()=>({}));const roles=normalizedRoles(body.roles),displayName=String(body.displayName||'').trim(),password=String(body.password||'');if(password&&password.length<10)return c.json({ok:false,error:'Lösenordet måste vara minst 10 tecken.'},400);
+  if(displayName)await c.env.DB.prepare("UPDATE users SET display_name=?,updated_at=datetime('now') WHERE id=?").bind(displayName,userId).run();await c.env.DB.prepare('DELETE FROM project_member_roles WHERE project_id=? AND user_id=?').bind(projectId,userId).run();for(const role of roles)await c.env.DB.prepare('INSERT INTO project_member_roles(project_id,user_id,role_code) VALUES(?,?,?)').bind(projectId,userId,role).run();if(password){const h=await hashPassword(password);await c.env.DB.prepare(`INSERT INTO user_credentials(user_id,password_salt,password_hash,iterations,updated_at) VALUES(?,?,?,?,datetime('now')) ON CONFLICT(user_id) DO UPDATE SET password_salt=excluded.password_salt,password_hash=excluded.password_hash,iterations=excluded.iterations,updated_at=datetime('now')`).bind(userId,h.salt,h.hash,h.iterations).run();await c.env.DB.prepare('DELETE FROM auth_sessions WHERE user_id=?').bind(userId).run()}return c.json({ok:true});
+ });
 }
