@@ -32,7 +32,7 @@ async function currentUser(c:any){
 async function attestationRoles(db:D1Database,userId:string,projectId:string){
   const rows=await db.prepare('SELECT role_code FROM project_member_roles WHERE user_id=? AND project_id=?').bind(userId,projectId).all();
   const explicit=(rows.results as any[]).map(row=>String(row.role_code||'').trim().toUpperCase()).filter(role=>role==='BH'||role==='KA');
-  return explicit.length?[...new Set(explicit)]:['BH'];
+  return [...new Set(explicit)];
 }
 
 function controllerRoles(value:unknown){
