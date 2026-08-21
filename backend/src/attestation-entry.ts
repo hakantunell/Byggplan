@@ -4,12 +4,14 @@ import { registerActivityOwnDocumentationRoutes } from './activity-own-documenta
 import { registerProjectDocumentCategoryRoutes } from './project-document-category-routes';
 import { registerAuthRoutes } from './auth-routes';
 import { registerProjectInformationRoutes } from './project-information-routes';
+import { registerProjectBackupRoutes } from './project-backup-routes';
 
 registerAuthRoutes(app as any);
 registerGoverningAttestationRoutes(app as any);
 registerActivityOwnDocumentationRoutes(app as any);
 registerProjectDocumentCategoryRoutes(app as any);
 registerProjectInformationRoutes(app as any);
+registerProjectBackupRoutes(app as any);
 
 (app as any).onError((error:any,c:any)=>{
   console.error('Unhandled API error',error);
