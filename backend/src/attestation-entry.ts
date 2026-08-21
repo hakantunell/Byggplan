@@ -5,6 +5,7 @@ import { registerProjectDocumentCategoryRoutes } from './project-document-catego
 import { registerAuthRoutes } from './auth-routes';
 import { registerProjectInformationRoutes } from './project-information-routes';
 import { registerProjectBackupRoutes } from './project-backup-routes';
+import { registerSystemBackupRoutes } from './system-backup-routes';
 
 registerAuthRoutes(app as any);
 registerGoverningAttestationRoutes(app as any);
@@ -12,6 +13,7 @@ registerActivityOwnDocumentationRoutes(app as any);
 registerProjectDocumentCategoryRoutes(app as any);
 registerProjectInformationRoutes(app as any);
 registerProjectBackupRoutes(app as any);
+registerSystemBackupRoutes(app as any);
 
 (app as any).onError((error:any,c:any)=>{
   console.error('Unhandled API error',error);
