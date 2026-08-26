@@ -6,6 +6,20 @@ function text(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function mapActivityType(value: unknown) {
+  const type = text(value);
+  const mapping: Record<string, string> = {
+    work: 'perform', perform: 'perform',
+    documentation: 'document', document: 'document',
+    measurement: 'measurement',
+    control: 'check', check: 'check',
+    approval: 'approval',
+    wait: 'note', note: 'note',
+    choice: 'choice'
+  };
+  return mapping[type] ?? 'perform';
+}
+
 async function nextSortOrder(db: D1Database, table: string, parentColumn: string, parentId: string) {
   const allowed = new Set(['work_areas', 'work_sections', 'tasks', 'activities']);
   const allowedParents = new Set(['project_id', 'work_area_id', 'work_section_id', 'task_id']);
@@ -150,7 +164,7 @@ app.post('/api/studio/activities', async c => {
   const taskId = text(body.taskId);
   const title = text(body.title);
   const description = text(body.description);
-  const activityType = text(body.activityType) || 'work';
+  const activityType = mapActivityType(body.activityType);
   if (!taskId || !title) return c.json({ ok: false, error: 'Moment och namn krävs.' }, 400);
   const parent = await c.env.DB.prepare('SELECT id FROM tasks WHERE id=?').bind(taskId).first();
   if (!parent) return c.json({ ok: false, error: 'Momentet hittades inte.' }, 404);
@@ -167,7 +181,7 @@ app.put('/api/studio/activities/:id', async c => {
   const body = await c.req.json<JsonBody>();
   const title = text(body.title);
   const description = text(body.description);
-  const activityType = text(body.activityType) || 'work';
+  const activityType = mapActivityType(body.activityType);
   if (!title) return c.json({ ok: false, error: 'Namn krävs.' }, 400);
   const result = await c.env.DB.prepare('UPDATE activities SET title=?,description=?,activity_type=? WHERE id=?')
     .bind(title, description, activityType, c.req.param('id')).run();
