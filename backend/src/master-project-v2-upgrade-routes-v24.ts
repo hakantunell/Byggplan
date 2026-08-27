@@ -1,0 +1,16 @@
+import { ensureMasterV23, registerMasterProjectV2UpgradeRoutesV23 } from './master-project-v2-upgrade-routes-v23';
+
+type RouteApp={post:(path:string,handler:(c:any)=>unknown)=>void};
+async function ensureContextSchema(db:D1Database){await db.prepare(`CREATE TABLE IF NOT EXISTS master_activity_contexts(master_activity_id TEXT PRIMARY KEY,lifecycle_stage TEXT NOT NULL DEFAULT 'build',surface TEXT NOT NULL DEFAULT 'field',applicability TEXT NOT NULL DEFAULT 'always',condition_text TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL DEFAULT (datetime('now')),FOREIGN KEY(master_activity_id) REFERENCES master_activities(id) ON DELETE CASCADE)`).run()}
+async function deprecate(db:D1Database,id:string,reason:string){await db.prepare(`INSERT INTO master_activity_contexts(master_activity_id,lifecycle_stage,surface,applicability,condition_text,updated_at) VALUES(?,'design','studio','deprecated',?,datetime('now')) ON CONFLICT(master_activity_id) DO UPDATE SET lifecycle_stage='design',surface='studio',applicability='deprecated',condition_text=excluded.condition_text,updated_at=datetime('now')`).bind(id,reason).run()}
+async function extend(db:D1Database,masterId:string){
+ await ensureContextSchema(db);
+ const rows=await db.prepare(`SELECT a.id,a.title,t.title task_title,s.name section_name,w.name area_name FROM master_activities a JOIN master_tasks t ON t.id=a.master_task_id JOIN master_work_sections s ON s.id=t.master_work_section_id JOIN master_work_areas w ON w.id=s.master_work_area_id LEFT JOIN master_activity_contexts ac ON ac.master_activity_id=a.id WHERE w.master_project_id=? AND lower(trim(w.name))=lower(trim('Säkerhet och färdigställande')) AND lower(trim(s.name))=lower(trim('Säkerhet')) AND COALESCE(ac.applicability,'always')<>'deprecated' ORDER BY t.sort_order,a.sort_order,a.id`).bind(masterId).all();
+ const list=rows.results as any[];
+ const target=list.find(r=>String(r.title).trim().toLowerCase()==='kontrollera fall-, glas-, barn- och tippsäkerhet där det är tillämpligt');
+ const duplicate=list.find(r=>String(r.title).trim().toLowerCase()==='kontrollera barnsäkerhet och säkerhet vid användning');
+ if(target&&duplicate&&String(target.id)!==String(duplicate.id))await deprecate(db,String(duplicate.id),'Överlappande aktivitet. Ersatt av "Kontrollera fall-, glas-, barn- och tippsäkerhet där det är tillämpligt" i Master v24.');
+ await db.prepare("UPDATE master_projects SET version=CASE WHEN version<24 THEN 24 ELSE version END,updated_at=datetime('now') WHERE id=?").bind(masterId).run();
+}
+export async function ensureMasterV24(db:D1Database,masterId:string){const row=await db.prepare('SELECT version FROM master_projects WHERE id=?').bind(masterId).first<any>();if(Number(row?.version||0)<23)await ensureMasterV23(db,masterId);await extend(db,masterId)}
+export function registerMasterProjectV2UpgradeRoutesV24(app:RouteApp){const proxy:RouteApp={post(path,handler){if(path!=='/api/studio/master-projects/upgrade-fritidshus-v2'){app.post(path,handler);return}app.post(path,async c=>{const response:any=await handler(c);if(!response||typeof response.clone!=='function'||!response.ok)return response;const data:any=await response.clone().json().catch(()=>null);if(!data?.id)return response;await extend(c.env.DB,String(data.id));return c.json({...data,version:24},response.status)})}};registerMasterProjectV2UpgradeRoutesV23(proxy)}
