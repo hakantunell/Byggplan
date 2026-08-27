@@ -1,6 +1,4 @@
-type Bindings={DB:D1Database;DEV_USER_EMAIL:string};
-
-type ActivityLocation={activity_id:string;task_id:string;project_id:string};
+type ActivityLocation={activity_id:string;task_id:string;project_id:string;status:string};
 type TargetTask={task_id:string;project_id:string;status:string};
 
 export function registerActivityMoveRoutes(app:any){
@@ -11,7 +9,7 @@ export function registerActivityMoveRoutes(app:any){
     if(!targetTaskId)return c.json({ok:false,error:'Välj vilket moment aktiviteten ska flyttas till.'},400);
 
     const source=await c.env.DB.prepare(`
-      SELECT a.id AS activity_id,a.task_id,wa.project_id
+      SELECT a.id AS activity_id,a.task_id,wa.project_id,t.status
       FROM activities a
       JOIN tasks t ON t.id=a.task_id
       JOIN work_sections ws ON ws.id=t.work_section_id
@@ -19,6 +17,7 @@ export function registerActivityMoveRoutes(app:any){
       WHERE a.id=?
     `).bind(activityId).first<ActivityLocation>();
     if(!source)return c.json({ok:false,error:'Aktiviteten hittades inte.'},404);
+    if(source.status==='review'||source.status==='done')return c.json({ok:false,error:'Aktiviteten kan inte flyttas från ett moment som är skickat för kontroll eller redan klart.'},409);
 
     const target=await c.env.DB.prepare(`
       SELECT t.id AS task_id,wa.project_id,t.status
