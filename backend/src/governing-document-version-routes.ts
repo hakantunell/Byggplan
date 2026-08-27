@@ -1,83 +1,46 @@
-type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void;post:(path:string,handler:(c:any)=>unknown)=>void;delete:(path:string,handler:(c:any)=>unknown)=>void};
+type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void;post:(path:string,handler:(c:any)=>unknown)=>void;put:(path:string,handler:(c:any)=>unknown)=>void;delete:(path:string,handler:(c:any)=>unknown)=>void};
 
+type DraftItem={id?:string;sourceItemId?:string|null;code?:string;description?:string;sectionCode?:string;sectionTitle?:string;itemType?:string;responsibleRole?:string;evidenceRequired?:string;sourceNote?:string};
 function clean(value:unknown){return typeof value==='string'?value.trim():''}
 function safeName(name:string){return name.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'-').replace(/-+/g,'-').replace(/^[-.]+|[-.]+$/g,'').slice(0,120)||'styrdokument'}
 function isFile(value:unknown):value is File{return Boolean(value&&typeof value==='object'&&typeof(value as any).stream==='function'&&typeof(value as any).size==='number')}
+function norm(value:unknown){return clean(value).replace(/\s+/g,' ').toLocaleLowerCase('sv-SE')}
 
 async function ensureSchema(db:D1Database){
  await db.prepare(`CREATE TABLE IF NOT EXISTS governing_document_versions(
-  id TEXT PRIMARY KEY,
-  document_id TEXT NOT NULL,
-  project_id TEXT NOT NULL,
-  version_no INTEGER NOT NULL,
-  version_label TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'candidate',
-  object_key TEXT NOT NULL UNIQUE,
-  original_name TEXT NOT NULL,
-  content_type TEXT NOT NULL,
-  size_bytes INTEGER NOT NULL DEFAULT 0,
-  note TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  activated_at TEXT,
-  FOREIGN KEY(document_id) REFERENCES governing_documents(id) ON DELETE CASCADE,
-  FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
-  UNIQUE(document_id,version_no)
+  id TEXT PRIMARY KEY,document_id TEXT NOT NULL,project_id TEXT NOT NULL,version_no INTEGER NOT NULL,version_label TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'candidate',object_key TEXT NOT NULL UNIQUE,original_name TEXT NOT NULL,content_type TEXT NOT NULL,size_bytes INTEGER NOT NULL DEFAULT 0,note TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL DEFAULT (datetime('now')),activated_at TEXT,
+  FOREIGN KEY(document_id) REFERENCES governing_documents(id) ON DELETE CASCADE,FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,UNIQUE(document_id,version_no)
  )`).run();
  await db.prepare('CREATE INDEX IF NOT EXISTS idx_governing_document_versions_document ON governing_document_versions(document_id,version_no DESC)').run();
+ await db.prepare(`CREATE TABLE IF NOT EXISTS governing_document_version_items(
+  id TEXT PRIMARY KEY,version_id TEXT NOT NULL,source_item_id TEXT,code TEXT NOT NULL DEFAULT '',description TEXT NOT NULL,section_code TEXT NOT NULL DEFAULT '',section_title TEXT NOT NULL DEFAULT '',item_type TEXT NOT NULL DEFAULT 'other',responsible_role TEXT NOT NULL DEFAULT '',evidence_required TEXT NOT NULL DEFAULT '',source_note TEXT NOT NULL DEFAULT '',sort_order INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT (datetime('now')),updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY(version_id) REFERENCES governing_document_versions(id) ON DELETE CASCADE
+ )`).run();
+ await db.prepare('CREATE INDEX IF NOT EXISTS idx_governing_version_items_version ON governing_document_version_items(version_id,sort_order)').run();
 }
 
 async function seedActiveVersion(db:D1Database,documentId:string){
- const count=await db.prepare('SELECT COUNT(*) count FROM governing_document_versions WHERE document_id=?').bind(documentId).first<any>();
- if(Number(count?.count||0)>0)return;
- const row=await db.prepare(`SELECT d.project_id,d.source_filename,d.source_mime_type,f.object_key,f.original_name,f.content_type,f.size_bytes
-  FROM governing_documents d LEFT JOIN governing_document_files f ON f.document_id=d.id WHERE d.id=?`).bind(documentId).first<any>();
- if(!row?.object_key)return;
- await db.prepare(`INSERT INTO governing_document_versions(id,document_id,project_id,version_no,version_label,status,object_key,original_name,content_type,size_bytes,note,created_at,activated_at)
-  VALUES(?,?,?,?,?,'active',?,?,?,?,?,datetime('now'),datetime('now'))`).bind(
-   crypto.randomUUID(),documentId,String(row.project_id),1,'Version 1',String(row.object_key),String(row.original_name||row.source_filename||'styrdokument'),String(row.content_type||row.source_mime_type||'application/octet-stream'),Number(row.size_bytes||0),'Importerad ursprungsversion'
-  ).run();
+ const count=await db.prepare('SELECT COUNT(*) count FROM governing_document_versions WHERE document_id=?').bind(documentId).first<any>();if(Number(count?.count||0)>0)return;
+ const row=await db.prepare(`SELECT d.project_id,d.source_filename,d.source_mime_type,f.object_key,f.original_name,f.content_type,f.size_bytes FROM governing_documents d LEFT JOIN governing_document_files f ON f.document_id=d.id WHERE d.id=?`).bind(documentId).first<any>();if(!row?.object_key)return;
+ await db.prepare(`INSERT INTO governing_document_versions(id,document_id,project_id,version_no,version_label,status,object_key,original_name,content_type,size_bytes,note,created_at,activated_at) VALUES(?,?,?,?,?,'active',?,?,?,?,?,datetime('now'),datetime('now'))`).bind(crypto.randomUUID(),documentId,String(row.project_id),1,'Version 1',String(row.object_key),String(row.original_name||row.source_filename||'styrdokument'),String(row.content_type||row.source_mime_type||'application/octet-stream'),Number(row.size_bytes||0),'Importerad ursprungsversion').run();
 }
+async function candidate(db:D1Database,documentId:string,versionId:string){return db.prepare("SELECT * FROM governing_document_versions WHERE id=? AND document_id=? AND status='candidate'").bind(versionId,documentId).first<any>()}
+async function activeItems(db:D1Database,documentId:string){const r=await db.prepare(`SELECT id,code,description,section_code,section_title,item_type,responsible_role,evidence_required,source_note,sort_order FROM governing_items WHERE governing_document_id=? ORDER BY sort_order,id`).bind(documentId).all();return r.results as any[]}
+async function seedDraft(db:D1Database,documentId:string,versionId:string){const count=await db.prepare('SELECT COUNT(*) count FROM governing_document_version_items WHERE version_id=?').bind(versionId).first<any>();if(Number(count?.count||0)>0)return false;const rows=await activeItems(db,documentId);for(const row of rows)await db.prepare(`INSERT INTO governing_document_version_items(id,version_id,source_item_id,code,description,section_code,section_title,item_type,responsible_role,evidence_required,source_note,sort_order) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),versionId,row.id,row.code||'',row.description||'',row.section_code||'',row.section_title||'',row.item_type||'other',row.responsible_role||'',row.evidence_required||'',row.source_note||'',Number(row.sort_order||0)).run();return true}
+function changedFields(oldRow:any,newRow:any){const pairs:[string,string,string][]=[['description','description','Beskrivning'],['section_code','section_code','Avsnittskod'],['section_title','section_title','Avsnitt'],['item_type','item_type','Typ'],['responsible_role','responsible_role','Ansvar'],['evidence_required','evidence_required','Underlag'],['source_note','source_note','Metod/notering']];return pairs.filter(([a,b])=>norm(oldRow[a])!==norm(newRow[b])).map(([, ,label])=>label)}
+async function executionState(db:D1Database,itemIds:string[]){const out:Record<string,{performed:boolean;documented:boolean;activityCount:number}>={};if(!itemIds.length)return out;for(let i=0;i<itemIds.length;i+=60){const ids=itemIds.slice(i,i+60),ph=ids.map(()=>'?').join(',');const rows=await db.prepare(`SELECT l.governing_item_id,a.id activity_id,COALESCE(e.done,0) done,
+ EXISTS(SELECT 1 FROM activity_documentation_fields f JOIN activity_documentation_entries de ON de.field_id=f.id WHERE f.activity_id=a.id) formal_docs,
+ EXISTS(SELECT 1 FROM activity_own_documentation od WHERE od.activity_id=a.id AND trim(od.note)<>'') own_note,
+ EXISTS(SELECT 1 FROM activity_own_documentation_files ofi WHERE ofi.activity_id=a.id) own_files
+ FROM governing_item_activity_links l JOIN activities a ON a.id=l.activity_id LEFT JOIN activity_entries e ON e.activity_id=a.id WHERE l.governing_item_id IN (${ph})`).bind(...ids).all();for(const row of rows.results as any[]){const key=String(row.governing_item_id),s=out[key]||{performed:false,documented:false,activityCount:0};s.activityCount++;s.performed=s.performed||Boolean(row.done);s.documented=s.documented||Boolean(row.formal_docs)||Boolean(row.own_note)||Boolean(row.own_files);out[key]=s}}return out}
+async function comparison(db:D1Database,documentId:string,versionId:string){const current=await activeItems(db,documentId),draftResult=await db.prepare('SELECT * FROM governing_document_version_items WHERE version_id=? ORDER BY sort_order,id').bind(versionId).all(),draft=draftResult.results as any[];const currentById=new Map(current.map(x=>[String(x.id),x])),draftBySource=new Map(draft.filter(x=>x.source_item_id).map(x=>[String(x.source_item_id),x]));const states=await executionState(db,current.map(x=>String(x.id)));const changes:any[]=[];for(const oldRow of current){const next=draftBySource.get(String(oldRow.id)),state=states[String(oldRow.id)]||{performed:false,documented:false,activityCount:0};if(!next){changes.push({kind:'removed',sourceItemId:oldRow.id,oldItem:oldRow,newItem:null,changedFields:[],...state});continue}const fields=changedFields(oldRow,next);changes.push({kind:fields.length?'changed':'unchanged',sourceItemId:oldRow.id,draftItemId:next.id,oldItem:oldRow,newItem:next,changedFields:fields,...state})}for(const next of draft)if(!next.source_item_id||!currentById.has(String(next.source_item_id)))changes.push({kind:'added',sourceItemId:null,draftItemId:next.id,oldItem:null,newItem:next,changedFields:[],performed:false,documented:false,activityCount:0});const summary={unchanged:changes.filter(x=>x.kind==='unchanged').length,changed:changes.filter(x=>x.kind==='changed').length,added:changes.filter(x=>x.kind==='added').length,removed:changes.filter(x=>x.kind==='removed').length,protected:changes.filter(x=>(x.kind==='changed'||x.kind==='removed')&&(x.performed||x.documented)).length};return{items:draft,changes,summary}}
 
 export function registerGoverningDocumentVersionRoutes(app:RouteApp){
- app.get('/api/studio/governing-documents/:id/versions',async c=>{
-  await ensureSchema(c.env.DB);const id=String(c.req.param('id'));
-  const document=await c.env.DB.prepare('SELECT id,project_id,title FROM governing_documents WHERE id=?').bind(id).first<any>();
-  if(!document)return c.json({ok:false,error:'Styrdokumentet hittades inte.'},404);
-  await seedActiveVersion(c.env.DB,id);
-  const rows=await c.env.DB.prepare(`SELECT id,version_no,version_label,status,original_name,content_type,size_bytes,note,created_at,activated_at FROM governing_document_versions WHERE document_id=? ORDER BY version_no DESC`).bind(id).all();
-  return c.json({ok:true,document:{id:document.id,title:document.title},versions:rows.results});
- });
-
- app.post('/api/studio/governing-documents/:id/version-candidates',async c=>{
-  await ensureSchema(c.env.DB);const id=String(c.req.param('id'));
-  const document=await c.env.DB.prepare('SELECT id,project_id,title FROM governing_documents WHERE id=?').bind(id).first<any>();
-  if(!document)return c.json({ok:false,error:'Styrdokumentet hittades inte.'},404);
-  if(!c.env.FILES)return c.json({ok:false,error:'Fillagringen är inte tillgänglig.'},503);
-  await seedActiveVersion(c.env.DB,id);
-  let form:FormData;try{form=await c.req.raw.formData()}catch{return c.json({ok:false,error:'Kunde inte läsa uppladdningen.'},400)}
-  const upload=form.get('file'),label=clean(form.get('versionLabel')),note=clean(form.get('note'));
-  if(!isFile(upload)||upload.size<=0)return c.json({ok:false,error:'Välj en giltig PDF eller bild.'},400);
-  if(upload.size>25*1024*1024)return c.json({ok:false,error:'Filen får vara högst 25 MB.'},413);
-  const contentType=clean((upload as any).type)||'application/octet-stream';
-  if(contentType!=='application/pdf'&&!contentType.startsWith('image/'))return c.json({ok:false,error:'Endast PDF och bilder stöds.'},415);
-  const max=await c.env.DB.prepare('SELECT COALESCE(MAX(version_no),0) max_version FROM governing_document_versions WHERE document_id=?').bind(id).first<any>();
-  const versionNo=Number(max?.max_version||0)+1,versionId=crypto.randomUUID(),originalName=clean((upload as any).name)||'styrdokument.pdf';
-  const objectKey=`projects/${document.project_id}/governing/${id}/versions/${versionId}-${safeName(originalName)}`;
-  await c.env.FILES.put(objectKey,(upload as any).stream(),{httpMetadata:{contentType},customMetadata:{projectId:String(document.project_id),documentId:id,versionId,originalName}});
-  try{
-   await c.env.DB.prepare(`INSERT INTO governing_document_versions(id,document_id,project_id,version_no,version_label,status,object_key,original_name,content_type,size_bytes,note)
-    VALUES(?,?,?,?,?,'candidate',?,?,?,?,?)`).bind(versionId,id,String(document.project_id),versionNo,label||`Version ${versionNo}`,objectKey,originalName,contentType,Number((upload as any).size||0),note).run();
-  }catch(error){await c.env.FILES.delete(objectKey).catch(()=>undefined);throw error}
-  return c.json({ok:true,candidate:{id:versionId,versionNo,versionLabel:label||`Version ${versionNo}`,status:'candidate',originalName,sizeBytes:Number((upload as any).size||0)},safety:{projectChanged:false,activitiesChanged:false,currentVersionPreserved:true}},201);
- });
-
- app.delete('/api/studio/governing-documents/:id/version-candidates/:versionId',async c=>{
-  await ensureSchema(c.env.DB);const id=String(c.req.param('id')),versionId=String(c.req.param('versionId'));
-  const row=await c.env.DB.prepare("SELECT object_key,status FROM governing_document_versions WHERE id=? AND document_id=?").bind(versionId,id).first<any>();
-  if(!row)return c.json({ok:false,error:'Kandidatversionen hittades inte.'},404);
-  if(String(row.status)!=='candidate')return c.json({ok:false,error:'Endast kandidatversioner kan tas bort här.'},409);
-  if(c.env.FILES&&row.object_key)await c.env.FILES.delete(String(row.object_key)).catch(()=>undefined);
-  await c.env.DB.prepare('DELETE FROM governing_document_versions WHERE id=?').bind(versionId).run();
-  return c.json({ok:true});
- });
+ app.get('/api/studio/governing-documents/:id/versions',async c=>{await ensureSchema(c.env.DB);const id=String(c.req.param('id'));const document=await c.env.DB.prepare('SELECT id,project_id,title FROM governing_documents WHERE id=?').bind(id).first<any>();if(!document)return c.json({ok:false,error:'Styrdokumentet hittades inte.'},404);await seedActiveVersion(c.env.DB,id);const rows=await c.env.DB.prepare(`SELECT id,version_no,version_label,status,original_name,content_type,size_bytes,note,created_at,activated_at,(SELECT COUNT(*) FROM governing_document_version_items vi WHERE vi.version_id=v.id) comparison_item_count FROM governing_document_versions v WHERE document_id=? ORDER BY version_no DESC`).bind(id).all();return c.json({ok:true,document:{id:document.id,title:document.title},versions:rows.results})});
+ app.post('/api/studio/governing-documents/:id/version-candidates',async c=>{await ensureSchema(c.env.DB);const id=String(c.req.param('id'));const document=await c.env.DB.prepare('SELECT id,project_id,title FROM governing_documents WHERE id=?').bind(id).first<any>();if(!document)return c.json({ok:false,error:'Styrdokumentet hittades inte.'},404);if(!c.env.FILES)return c.json({ok:false,error:'Fillagringen är inte tillgänglig.'},503);await seedActiveVersion(c.env.DB,id);let form:FormData;try{form=await c.req.raw.formData()}catch{return c.json({ok:false,error:'Kunde inte läsa uppladdningen.'},400)}const upload=form.get('file'),label=clean(form.get('versionLabel')),note=clean(form.get('note'));if(!isFile(upload)||upload.size<=0)return c.json({ok:false,error:'Välj en giltig PDF eller bild.'},400);if(upload.size>25*1024*1024)return c.json({ok:false,error:'Filen får vara högst 25 MB.'},413);const contentType=clean((upload as any).type)||'application/octet-stream';if(contentType!=='application/pdf'&&!contentType.startsWith('image/'))return c.json({ok:false,error:'Endast PDF och bilder stöds.'},415);const max=await c.env.DB.prepare('SELECT COALESCE(MAX(version_no),0) max_version FROM governing_document_versions WHERE document_id=?').bind(id).first<any>();const versionNo=Number(max?.max_version||0)+1,versionId=crypto.randomUUID(),originalName=clean((upload as any).name)||'styrdokument.pdf';const objectKey=`projects/${document.project_id}/governing/${id}/versions/${versionId}-${safeName(originalName)}`;await c.env.FILES.put(objectKey,(upload as any).stream(),{httpMetadata:{contentType},customMetadata:{projectId:String(document.project_id),documentId:id,versionId,originalName}});try{await c.env.DB.prepare(`INSERT INTO governing_document_versions(id,document_id,project_id,version_no,version_label,status,object_key,original_name,content_type,size_bytes,note) VALUES(?,?,?,?,?,'candidate',?,?,?,?,?)`).bind(versionId,id,String(document.project_id),versionNo,label||`Version ${versionNo}`,objectKey,originalName,contentType,Number((upload as any).size||0),note).run()}catch(error){await c.env.FILES.delete(objectKey).catch(()=>undefined);throw error}return c.json({ok:true,candidate:{id:versionId,versionNo,versionLabel:label||`Version ${versionNo}`,status:'candidate',originalName,sizeBytes:Number((upload as any).size||0)},safety:{projectChanged:false,activitiesChanged:false,currentVersionPreserved:true}},201)});
+ app.get('/api/studio/governing-documents/:id/version-candidates/:versionId/file',async c=>{await ensureSchema(c.env.DB);const id=String(c.req.param('id')),versionId=String(c.req.param('versionId'));const row=await candidate(c.env.DB,id,versionId);if(!row)return c.json({ok:false,error:'Kandidatversionen hittades inte.'},404);const o=await c.env.FILES.get(String(row.object_key));if(!o)return c.json({ok:false,error:'Kandidatfilen saknas i lagringen.'},404);const h=new Headers();o.writeHttpMetadata(h);h.set('Content-Type',String(row.content_type||h.get('Content-Type')||'application/octet-stream'));h.set('Content-Disposition',`inline; filename="${safeName(String(row.original_name||'styrdokument'))}"`);return new Response(o.body,{headers:h})});
+ app.post('/api/studio/governing-documents/:id/version-candidates/:versionId/prepare-comparison',async c=>{await ensureSchema(c.env.DB);const id=String(c.req.param('id')),versionId=String(c.req.param('versionId'));if(!await candidate(c.env.DB,id,versionId))return c.json({ok:false,error:'Kandidatversionen hittades inte.'},404);const seeded=await seedDraft(c.env.DB,id,versionId);return c.json({ok:true,seeded,...await comparison(c.env.DB,id,versionId),message:seeded?'Jämförelseutkastet skapades som en kopia av nuvarande styrpunkter. Ändra bara det som skiljer i den nya versionen.':'Befintligt jämförelseutkast öppnades.'})});
+ app.get('/api/studio/governing-documents/:id/version-candidates/:versionId/comparison',async c=>{await ensureSchema(c.env.DB);const id=String(c.req.param('id')),versionId=String(c.req.param('versionId'));if(!await candidate(c.env.DB,id,versionId))return c.json({ok:false,error:'Kandidatversionen hittades inte.'},404);return c.json({ok:true,...await comparison(c.env.DB,id,versionId)})});
+ app.put('/api/studio/governing-documents/:id/version-candidates/:versionId/comparison-draft',async c=>{await ensureSchema(c.env.DB);const id=String(c.req.param('id')),versionId=String(c.req.param('versionId'));if(!await candidate(c.env.DB,id,versionId))return c.json({ok:false,error:'Kandidatversionen hittades inte.'},404);const body=await c.req.json<{items?:DraftItem[]}>().catch(()=>({}));const items=Array.isArray(body.items)?body.items:[];if(!items.length)return c.json({ok:false,error:'Jämförelseutkastet måste innehålla minst en styrpunkt.'},400);await c.env.DB.prepare('DELETE FROM governing_document_version_items WHERE version_id=?').bind(versionId).run();for(let i=0;i<items.length;i++){const item=items[i],description=clean(item.description);if(!description)continue;await c.env.DB.prepare(`INSERT INTO governing_document_version_items(id,version_id,source_item_id,code,description,section_code,section_title,item_type,responsible_role,evidence_required,source_note,sort_order) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),versionId,clean(item.sourceItemId)||null,clean(item.code),description,clean(item.sectionCode),clean(item.sectionTitle),clean(item.itemType)||'other',clean(item.responsibleRole),clean(item.evidenceRequired),clean(item.sourceNote),(i+1)*10).run()}return c.json({ok:true,...await comparison(c.env.DB,id,versionId),safety:{projectChanged:false,activitiesChanged:false,executionPreserved:true}})});
+ app.delete('/api/studio/governing-documents/:id/version-candidates/:versionId',async c=>{await ensureSchema(c.env.DB);const id=String(c.req.param('id')),versionId=String(c.req.param('versionId'));const row=await c.env.DB.prepare("SELECT object_key,status FROM governing_document_versions WHERE id=? AND document_id=?").bind(versionId,id).first<any>();if(!row)return c.json({ok:false,error:'Kandidatversionen hittades inte.'},404);if(String(row.status)!=='candidate')return c.json({ok:false,error:'Endast kandidatversioner kan tas bort här.'},409);if(c.env.FILES&&row.object_key)await c.env.FILES.delete(String(row.object_key)).catch(()=>undefined);await c.env.DB.prepare('DELETE FROM governing_document_versions WHERE id=?').bind(versionId).run();return c.json({ok:true})});
 }
