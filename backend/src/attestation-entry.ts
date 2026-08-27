@@ -8,6 +8,7 @@ import { registerProjectBackupRoutes } from './project-backup-routes';
 import { registerSystemBackupRoutes } from './system-backup-routes';
 import { registerProjectExecutionResetRoutes } from './project-execution-reset-routes';
 import { registerGoverningDocumentVersionRoutes } from './governing-document-version-routes';
+import { registerGoverningVersionDecisionRoutes } from './governing-version-decision-routes';
 
 registerAuthRoutes(app as any);
 registerGoverningAttestationRoutes(app as any);
@@ -18,6 +19,7 @@ registerProjectBackupRoutes(app as any);
 registerSystemBackupRoutes(app as any);
 registerProjectExecutionResetRoutes(app as any);
 registerGoverningDocumentVersionRoutes(app as any);
+registerGoverningVersionDecisionRoutes(app as any);
 
 (app as any).onError((error:any,c:any)=>{
   console.error('Unhandled API error',error);
