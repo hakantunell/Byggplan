@@ -1,6 +1,7 @@
 import app from './attestation-entry';
 import {authConfigured,sessionUserFromRequest} from './auth-session';
 
+// Governing document version comparison/activation routes are registered through attestation-entry.
 type Env={DB:D1Database;FILES:R2Bucket;DEV_USER_EMAIL:string;ALLOWED_ORIGIN?:string;AUTH_BOOTSTRAP_TOKEN?:string;[key:string]:unknown};
 
 export default {
