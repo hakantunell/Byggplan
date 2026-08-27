@@ -20,7 +20,7 @@ const PRACTICAL_REQUIREMENTS:Record<string,string>={
 
 function cleanGeneratedDescription(description:string,code:string){
  const text=description.trim();
- const oldWhole=new RegExp(`^Kontrollplan\\s+${code.replace(/[.*+?^${}()|[\\]\\]/g,'\\$&')}\\s*:`, 'i');
+ const oldWhole=new RegExp(`^Kontrollplan\\s+${code}\\s*:`, 'i');
  if(oldWhole.test(text))return '';
  const marker='Styrdokument – tillkommande kontroll:';
  const marker2='Styrdokument – kontrollinstruktion:';
@@ -30,7 +30,7 @@ function cleanGeneratedDescription(description:string,code:string){
   if(index>=0){
    const before=base.slice(0,index).trim();
    const after=base.slice(index+m.length).trim();
-   const lines=after.split(/\r?\n/).filter(line=>!new RegExp(`^•?\\s*Kontrollplan\\s+${code.replace(/[.*+?^${}()|[\\]\\]/g,'\\$&')}\\b`,'i').test(line.trim()));
+   const lines=after.split(/\r?\n/).filter(line=>!new RegExp(`^•?\\s*Kontrollplan\\s+${code}\\b`,'i').test(line.trim()));
    base=[before,lines.join('\n').trim()].filter(Boolean).join('\n\n').trim();
   }
  }
