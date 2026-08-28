@@ -1,7 +1,7 @@
 {
   "id": "fritidshus-v1",
   "name": "Masterprojekt – Fritidshus",
-  "version": 1,
+  "version": 2,
   "scope": "Startbesked till slutbesked",
   "principles": [
     "Projektet är sanningen.",
@@ -12,7 +12,8 @@
     "Dokumentation ska fångas innan den byggs in eller inte längre går att verifiera.",
     "Styrande poster mappas mot aktiviteter efter att byggprocessen är etablerad.",
     "Separata moment dupliceras endast när separat arbetsflöde eller separat dokumentation verkligen behövs.",
-    "ByggPlan ska minimera administration och beslut som användaren själv måste fatta."
+    "ByggPlan ska minimera administration och beslut som användaren själv måste fatta.",
+    "Momentbeskrivningen ska på några rader förklara vad som görs i momentet, vilka förutsättningar som ska vara uppfyllda och vad som ska vara klart innan nästa skede."
   ],
   "workAreas": [
     {
@@ -25,7 +26,7 @@
           "tasks": [
             {
               "title": "Starta byggarbetsplatsen",
-              "description": "Säkerställ att de praktiska och formella förutsättningarna finns innan markarbeten startar.",
+              "description": "Säkerställ att de formella och praktiska förutsättningarna för att börja bygga finns på plats. Kontrollera startbesked, aktuella handlingar, arbetsmiljö och tillfälliga försörjningar samt dokumentera utgångsläget på tomten. Momentet är klart när markarbetena kan starta utan kända administrativa eller praktiska hinder.",
               "activities": [
                 {"title":"Kontrollera att startbesked finns","type":"check"},
                 {"title":"Kontrollera gällande ritningar och handlingar","type":"check"},
@@ -51,6 +52,7 @@
           "tasks": [
             {
               "title": "Förbered markarbete",
+              "description": "Förbered tomten för schakt genom att kontrollera situationsplan, grundritning, anslutningspunkter och kända ledningar. Märk ut byggnadens ungefärliga läge och viktiga höjder för schaktarbetet samt planera massor, upplag och tillfällig vattenavledning. Momentet ska ge tydliga förutsättningar för att schakta på rätt plats och till rätt nivå.",
               "activities": [
                 {"title":"Kontrollera situationsplan och grundritning","type":"check"},
                 {"title":"Märk ut byggnad och kritiska nivåer","type":"perform"},
@@ -67,6 +69,7 @@
           "tasks": [
             {
               "title": "Utför schakt",
+              "description": "Schakta byggytan till projekterade nivåer med utgångspunkt i utsättning och höjdfix. Kontrollera löpande mått, djup och markförhållanden och hantera avvikelser innan arbetet fortsätter. Momentet avslutas med en ren och kontrollerad schaktbotten som är dokumenterad och klar för undergrundens uppbyggnad.",
               "activities": [
                 {"title":"Kontrollera utsättning","type":"check"},
                 {"title":"Kontrollera höjdfix och schaktnivåer","type":"check"},
@@ -88,6 +91,7 @@
           "tasks": [
             {
               "title": "Förbered undergrund",
+              "description": "Bygg upp ett stabilt, dränerande och kapillärbrytande underlag för grundkonstruktionen. Lägg geotextil där den behövs, fyll med föreskrivet material och packa till rätt nivå och planhet. Kontrollera och dokumentera de lager som senare byggs in innan arbetet går vidare till form, armering och grund.",
               "activities": [
                 {"title":"Lägg geotextil där konstruktionen kräver det","type":"perform"},
                 {"title":"Kontrollera geotextil före täckning","type":"check"},
@@ -106,7 +110,7 @@
           "tasks": [
             {
               "title": "Bygg grundkonstruktion",
-              "description": "Detaljer kompletteras av vald grundmodul, exempelvis torpargrund, platta eller källare.",
+              "description": "Sätt ut grundens exakta läge efter schakt och undergrund, bygg form och montera armering samt nödvändiga genomföringar enligt konstruktionshandlingarna. Kontrollera mått, nivåer och inbyggda delar och genomför föreskriven lägeskontroll och andra stoppkontroller innan gjutning. Därefter gjuts eller monteras grundkonstruktionen och färdiga nivåer dokumenteras innan nästa skede.",
               "activities": [
                 {"title":"Kontrollera grundens mått och nivåer före montage eller gjutning","type":"check"},
                 {"title":"Montera form där det krävs","type":"perform"},
@@ -128,6 +132,7 @@
           "tasks": [
             {
               "title": "Dränera och återfyll",
+              "description": "Färdigställ dränering, grundisolering och övrigt skydd runt den byggda grunden innan konstruktionerna täcks. Kontrollera och fotografera dolda delar, återfyll med rätt material och packa på ett sätt som inte skadar grund eller ledningar. Avsluta med marknivåer och fall som leder vatten bort från byggnaden.",
               "activities": [
                 {"title":"Montera dränering där det krävs","type":"perform"},
                 {"title":"Kontrollera dränering före återfyllnad","type":"check"},
@@ -154,6 +159,7 @@
           "tasks": [
             {
               "title": "Bygg bottenbjälklag och syll",
+              "description": "Kontrollera att grunden har rätt mått och nivåer innan stommen börjar byggas. Montera fuktskydd eller syllisolering, syllar, bärlinor och bjälklag med rätt upplag, förankring och avväxlingar. Dokumentera bärande delar som senare blir dolda och lämna en stabil och inmätt bas för väggstommen.",
               "activities": [
                 {"title":"Kontrollera grundens mått och nivå innan stomstart","type":"check"},
                 {"title":"Montera fuktskydd eller syllisolering","type":"perform"},
@@ -172,7 +178,7 @@
           "tasks": [
             {
               "title": "Bygg ytterväggar",
-              "description": "Utförandet kompletteras av vald stommodul, exempelvis timmer eller regelstomme.",
+              "description": "Res och sammanfoga ytterväggarnas bärande stomme enligt projektets valda stomlösning, exempelvis timmer eller regelstomme. Kontrollera väggplacering, öppningar, lod, stabilisering, förstärkningar och bärande anslutningar under uppförandet. Momentet är klart när ytterväggsstommen är stabil, rätt placerad och dokumenterad inför fortsatt stom- och takarbete.",
               "activities": [
                 {"title":"Kontrollera väggplacering och öppningsmått","type":"check"},
                 {"title":"Bygg ytterväggsstomme","type":"perform"},
@@ -190,6 +196,7 @@
           "tasks": [
             {
               "title": "Bygg invändigt bärverk",
+              "description": "Montera bärande balkar, bjälkar, loftdelar och andra invändiga bärverk med rätt upplag och avväxlingar. Kontrollera infästningar, stabilitet, öppningar och frihöjder innan konstruktionen byggs vidare eller täcks. Dokumentera de bärande delar som senare blir svåra att kontrollera.",
               "activities": [
                 {"title":"Kontrollera upplag och avväxlingar","type":"check"},
                 {"title":"Montera bärande balkar och bjälkar","type":"perform"},
@@ -212,6 +219,7 @@
           "tasks": [
             {
               "title": "Bygg takstomme",
+              "description": "Bygg takets bärande konstruktion med rätt geometri, upplag, förankring och stabilisering. Kontrollera avväxlingar runt öppningar och genomföringar och säkerställ att stommen är stabil innan undertaket monteras. Dokumentera bärande detaljer som kommer att döljas av den fortsatta takkonstruktionen.",
               "activities": [
                 {"title":"Kontrollera takgeometri och upplag","type":"check"},
                 {"title":"Montera takbärverk","type":"perform"},
@@ -228,6 +236,7 @@
           "tasks": [
             {
               "title": "Montera undertak",
+              "description": "Montera råspont eller annat föreskrivet undertak och kontrollera underlaget innan underlagstäckningen läggs. Utför tätskiktet med särskild kontroll av skarvar, anslutningar och genomföringar så att taket blir väderskyddat. Dokumentera kritiska detaljer innan de täcks av yttertaket.",
               "activities": [
                 {"title":"Montera råspont eller annat föreskrivet undertak","type":"perform"},
                 {"title":"Kontrollera underlag före tätskikt","type":"check"},
@@ -244,6 +253,7 @@
           "tasks": [
             {
               "title": "Montera yttertak",
+              "description": "Förbered montageunderlaget och montera den färdiga taktäckningen med beslag, tätningar och nödvändiga taksäkerhetsanordningar. Kontrollera särskilt genomföringar och anslutningar där vatten kan tränga in. Momentet är klart när yttertaket är komplett, vädertätt och dokumenterat.",
               "activities": [
                 {"title":"Kontrollera läktning eller montageunderlag","type":"check"},
                 {"title":"Montera yttertak","type":"perform"},
@@ -267,6 +277,7 @@
           "tasks": [
             {
               "title": "Montera fönster och ytterdörrar",
+              "description": "Kontrollera öppningsmått och montera fönster och ytterdörrar med rätt infästning och funktion. Täta anslutningarna mot stommen så att de klarar luft och regn utan att hindra konstruktionens avsedda rörelser. Dokumentera kritiska anslutningar innan smygar eller annan inklädnad döljer dem.",
               "activities": [
                 {"title":"Kontrollera öppningsmått före montage","type":"check"},
                 {"title":"Montera fönster och ytterdörrar","type":"perform"},
@@ -284,6 +295,7 @@
           "tasks": [
             {
               "title": "Färdigställ fasad",
+              "description": "Färdigställ ytterväggens väderskyddande skikt med vindskydd, luftning, fasadbeklädnad och utvändiga bleck eller motsvarande detaljer där de behövs. Kontrollera anslutningar runt öppningar och övergångar så att regnvatten leds ut och konstruktionen kan torka. Momentet avslutas med ett sammanhängande och kontrollerat yttre regnskydd.",
               "activities": [
                 {"title":"Kontrollera vindskydd och anslutningar","type":"check"},
                 {"title":"Montera luftning och spikläkt där det krävs","type":"perform"},
@@ -300,6 +312,7 @@
           "tasks": [
             {
               "title": "Isolera och lufttäta klimatskal",
+              "description": "Montera isolering och luft- eller ångtätningsskikt enligt vald vägg- och takkonstruktion. Kontrollera särskilt anslutningar, skarvar och genomföringar och dokumentera sådant som blir dolt innan invändig beklädnad monteras. Om projektet kräver täthetsprovning genomförs den när klimatskalet är tillräckligt färdigt för ett meningsfullt resultat.",
               "activities": [
                 {"title":"Kontrollera installations- och isoleringsförutsättningar","type":"check"},
                 {"title":"Montera isolering","type":"perform"},
@@ -326,6 +339,7 @@
           "tasks": [
             {
               "title": "Förbered VVS-installationer",
+              "description": "Planera VVS-installationen innan väggar, golv och andra konstruktioner stängs. Kontrollera tappställen, avloppspunkter, rörvägar och genomföringar och gör nödvändiga urtag i rätt skede. Momentet är klart när installationen kan utföras utan onödiga ingrepp i färdiga konstruktioner och nödvändiga komponenter finns tillgängliga.",
               "activities": [
                 {"title":"Kontrollera placering av tappställen och avloppsanslutningar","type":"check"},
                 {"title":"Kontrollera rörvägar och genomföringar","type":"check"},
@@ -335,6 +349,7 @@
             },
             {
               "title": "Montera spillvatten och vatten",
+              "description": "Montera spillvatten- och vattenledningar enligt projekterad dragning med rätt dimensioner, fall, infästningar och genomföringar. Kontrollera och dokumentera dolda ledningar innan de byggs in. Genomför erforderlig täthets- eller tryckkontroll innan installationen lämnas vidare till nästa byggskede.",
               "activities": [
                 {"title":"Montera spillvattenledningar","type":"perform"},
                 {"title":"Kontrollera dimensioner och fall på spillvatten","type":"measurement"},
@@ -352,6 +367,7 @@
           "tasks": [
             {
               "title": "Förbered elinstallation",
+              "description": "Planera elinstallationens placeringar och kabelvägar innan konstruktioner stängs eller ytskikt påbörjas. Kontrollera central, uttag, brytare, fasta anslutningar, dosor och genomföringar och samordna dragningarna med VVS och ventilation. Momentet ska ge en genomförbar och samordnad installationsplan för det dolda elarbetet.",
               "activities": [
                 {"title":"Kontrollera placering av central, uttag, brytare och fasta anslutningar","type":"check"},
                 {"title":"Kontrollera kabelvägar, dosor och genomföringar","type":"check"},
@@ -360,6 +376,7 @@
             },
             {
               "title": "Utför dold elinstallation",
+              "description": "Montera dosor, kabelvägar och andra delar av elinstallationen som ska döljas i väggar, golv eller tak. Kontrollera placeringar och höjder och genomför föreskrivna kontroller innan konstruktionerna byggs igen. Dokumentera den dolda installationen så att dragningar och placeringar kan återfinnas senare.",
               "activities": [
                 {"title":"Montera dosor och kabelvägar","type":"perform"},
                 {"title":"Kontrollera placering och höjder före igenbyggnad","type":"check"},
@@ -375,6 +392,7 @@
           "tasks": [
             {
               "title": "Montera ventilation",
+              "description": "Montera kanaler, ventiler och fläktar enligt vald ventilationslösning och samordna dem med övriga installationer och byggdelar. Kontrollera genomföringar samt isolering och kondensskydd där det behövs. Dokumentera dolda ventilationsdelar innan de byggs in.",
               "activities": [
                 {"title":"Kontrollera kanaldragning och genomföringar","type":"check"},
                 {"title":"Montera kanaler, ventiler och fläktar","type":"perform"},
@@ -390,6 +408,7 @@
           "tasks": [
             {
               "title": "Installera uppvärmningssystem",
+              "description": "Förbered och installera byggnadens valda uppvärmningsutrustning med rätt placering, anslutningar och genomföringar. Kontrollera att installationen kan samverka med byggnadens övriga system och att montageförutsättningarna är uppfyllda. Spara produktdata och installationsdokumentation inför driftsättning och slutdokumentation.",
               "activities": [
                 {"title":"Kontrollera vald uppvärmningslösning och montageplats","type":"check"},
                 {"title":"Förbered anslutningar och genomföringar","type":"perform"},
@@ -399,6 +418,7 @@
             },
             {
               "title": "Installera eldstad och rökkanal",
+              "description": "Kontrollera placering, skyddsavstånd och genomföringar innan eldstad och rökkanal monteras. Utför brandskyddande detaljer och dokumentera sådant som blir dolt i bjälklag eller tak. Momentet avslutas med föreskriven besiktning och registrering av protokoll eller intyg.",
               "activities": [
                 {"title":"Kontrollera placering och avstånd till brännbart","type":"check"},
                 {"title":"Kontrollera genomföringar och brandskydd före montage","type":"check"},
@@ -416,6 +436,7 @@
           "tasks": [
             {
               "title": "Frigör golv för igenbyggnad",
+              "description": "Gör en samlad stoppkontroll av golvkonstruktionen innan den stängs. Säkerställ att installationer och andra inbyggda delar är färdiga, kontrollerade och dokumenterade och fotografera helheten medan den fortfarande är synlig. Frigör först därefter golvet för isolering, skivor eller annan igenbyggnad.",
               "activities": [
                 {"title":"Kontrollera att relevanta installationer i golvet är klara","type":"check"},
                 {"title":"Kontrollera att obligatorisk dokumentation finns","type":"check"},
@@ -425,6 +446,7 @@
             },
             {
               "title": "Frigör väggar för igenbyggnad",
+              "description": "Gör en samlad stoppkontroll av väggarna innan installationer och förstärkningar döljs. Kontrollera att installationer, genomföringar, förstärkningar och eventuella brandtätningar är klara och dokumenterade. Fotografera väggarna och frigör dem först därefter för isolering och beklädnad.",
               "activities": [
                 {"title":"Kontrollera att relevanta installationer i väggarna är klara","type":"check"},
                 {"title":"Kontrollera förstärkningar, genomföringar och brandtätningar","type":"check"},
@@ -435,6 +457,7 @@
             },
             {
               "title": "Frigör innertak för igenbyggnad",
+              "description": "Kontrollera området ovan innertaket innan det stängs. Säkerställ att installationer, genomföringar och lufttätningsdetaljer är färdiga och dokumenterade medan de fortfarande går att inspektera. Frigör därefter innertaket för beklädnad.",
               "activities": [
                 {"title":"Kontrollera att installationer ovan innertak är klara","type":"check"},
                 {"title":"Kontrollera genomföringar och lufttäthet","type":"check"},
@@ -456,6 +479,7 @@
           "tasks": [
             {
               "title": "Färdigställ golvkonstruktion",
+              "description": "Färdigställ golvkonstruktionen efter att dolda installationer och andra inbyggda delar har kontrollerats och frigivits. Montera isolering och kompletterande skikt, kontrollera innan stängning och lägg undergolvet. Avsluta med kontroll av nivå, planhet och genomföringar inför färdiga golv.",
               "activities": [
                 {"title":"Kontrollera att golvet är frigivet för igenbyggnad","type":"check"},
                 {"title":"Montera isolering och kompletterande skikt","type":"perform"},
@@ -472,6 +496,7 @@
           "tasks": [
             {
               "title": "Bygg innerväggar",
+              "description": "Märk ut och bygg innerväggarnas stommar med rätt öppningar och förstärkningar för inredning och installationer. Kontrollera mått och lod och dokumentera sådant som senare döljs. När installationer och övriga inbyggda delar är frigivna isoleras och bekläs väggarna enligt projektets utförande.",
               "activities": [
                 {"title":"Märk ut innerväggar och öppningar","type":"perform"},
                 {"title":"Bygg innerväggsstomme","type":"perform"},
@@ -491,6 +516,7 @@
           "tasks": [
             {
               "title": "Montera innertak",
+              "description": "Kontrollera att utrymmet ovan innertaket är färdigt och frigivet innan det stängs. Kontrollera glespanel, infästningspunkter och genomföringar och montera därefter innertaket. Momentet avslutas med kontroll av genomföringar och anslutningar mot angränsande byggdelar.",
               "activities": [
                 {"title":"Kontrollera att innertaket är frigivet för igenbyggnad","type":"check"},
                 {"title":"Kontrollera glespanel och infästningspunkter","type":"check"},
@@ -512,6 +538,7 @@
           "tasks": [
             {
               "title": "Kontrollera våtrumsförutsättningar",
+              "description": "Fastställ våtrummets systemlösning och kontrollera att golvbrunn, genomföringar, förstärkningar och underlag kan utföras enligt valt tätskiktssystem. Samordna förutsättningarna innan golv- och väggunderlag byggs så att senare ändringar i tätskiktszonen undviks. Momentet är klart när underlagen kan byggas med en tydlig och verifierad våtrumslösning.",
               "activities": [
                 {"title":"Kontrollera våtrumsritning och vald systemlösning","type":"check"},
                 {"title":"Kontrollera golvbrunn och placering","type":"check"},
@@ -527,6 +554,7 @@
           "tasks": [
             {
               "title": "Bygg våtrumsunderlag",
+              "description": "Bygg våtrummets golv- och väggunderlag enligt den valda systemlösningen och skapa föreskrivet fall mot golvbrunnen. Kontrollera fall, brunnshöjd, planhet och övriga krav innan tätskiktet påbörjas. Fotografera det färdiga underlaget så att utförandet kan verifieras även efter att tätskikt och ytskikt har monterats.",
               "activities": [
                 {"title":"Bygg golvunderlag","type":"perform"},
                 {"title":"Skapa föreskrivet fall mot golvbrunn","type":"perform"},
@@ -544,6 +572,7 @@
           "tasks": [
             {
               "title": "Utför tätskikt",
+              "description": "Utför våtrummets tätskikt som ett sammanhållet system enligt systemleverantörens anvisningar. Kontrollera material, manschetter, hörn, genomföringar och anslutningen mot golvbrunnen och dokumentera kritiska delar innan ytskikt läggs. Våtrummet frigörs för ytskikt först när tätskiktet är färdigt och kontrollerat.",
               "activities": [
                 {"title":"Kontrollera material och systemkomponenter","type":"check"},
                 {"title":"Montera manschetter och förstärkningar","type":"perform"},
@@ -562,6 +591,7 @@
           "tasks": [
             {
               "title": "Färdigställ våtrum",
+              "description": "Montera våtrummets ytskikt, sanitetsutrustning och fasta inredning efter att tätskiktet har frigivits. Kontrollera anslutningar, tätningar, golvfall och funktion hos de färdiga installationerna. Samla intyg och tätskiktsdokumentation och fotografera det färdiga våtrummet inför slutkontrollen.",
               "activities": [
                 {"title":"Montera våtrummets ytskikt","type":"perform"},
                 {"title":"Montera sanitetsutrustning och inredning","type":"perform"},
@@ -585,6 +615,7 @@
           "tasks": [
             {
               "title": "Färdigställ invändiga ytskikt",
+              "description": "Kontrollera att underlagen är färdiga innan invändiga ytskikt utförs. Färdigställ väggar, tak och golv i rätt ordning och med hänsyn till anslutningar mot dörrar, fönster, installationer och fast inredning. Momentet är klart när de allmänna invändiga ytorna är färdiga och kontrollerade.",
               "activities": [
                 {"title":"Kontrollera underlag före ytskikt","type":"check"},
                 {"title":"Färdigställ väggytor","type":"perform"},
@@ -601,6 +632,7 @@
           "tasks": [
             {
               "title": "Montera fast inredning",
+              "description": "Kontrollera förstärkningar och installationspunkter innan kök och annan fast inredning monteras. Montera skåp, inredning, vitvaror och anslutningar med rätt infästning och låt behörig installatör utföra de delar där det krävs. Avsluta med funktions- och infästningskontroll.",
               "activities": [
                 {"title":"Kontrollera förstärkningar och installationspunkter","type":"check"},
                 {"title":"Montera kök och fast inredning","type":"perform"},
@@ -616,6 +648,7 @@
           "tasks": [
             {
               "title": "Montera trappor och skydd",
+              "description": "Montera trappor, räcken, handledare och andra permanenta skydd när omgivande konstruktioner har nått rätt mått och nivåer. Kontrollera trappgeometri, frihöjd, stabilitet och personsäkerhet samt genomför aktuella barnsäkerhetsåtgärder. Momentet är klart när byggnaden kan användas säkert i de berörda delarna.",
               "activities": [
                 {"title":"Kontrollera trappmått och frihöjd","type":"measurement"},
                 {"title":"Montera trappa","type":"perform"},
@@ -638,6 +671,7 @@
           "tasks": [
             {
               "title": "Färdigställ dagvatten och mark",
+              "description": "Färdigställ byggnadens dagvattenhantering och de slutliga marknivåerna runt huset. Kontrollera lösningen mot beslutade handlingar, dokumentera dolda ledningar och utlopp innan de täcks och forma marken så att ytvatten leds bort från byggnaden. Momentet avslutas med kontroll av markfall och fungerande avledning.",
               "activities": [
                 {"title":"Kontrollera dagvattenlösning mot beslutad handling","type":"check"},
                 {"title":"Montera eller färdigställ dagvattenledningar och utlopp","type":"perform"},
@@ -654,6 +688,7 @@
           "tasks": [
             {
               "title": "Färdigställ utvändigt VA",
+              "description": "Montera utvändiga vatten- och spillvattenledningar mellan byggnaden och projektets anslutningspunkter eller anläggningar. Kontrollera ledningsbädd, dimensioner, fall, frostskydd och anslutningar och dokumentera allt som blir dolt. Genomför föreskrivna prov eller inspektioner innan ledningsschakten återfylls.",
               "activities": [
                 {"title":"Kontrollera ledningssträckning och anslutningspunkter","type":"check"},
                 {"title":"Montera utvändiga vatten- och spillvattenledningar","type":"perform"},
@@ -677,6 +712,7 @@
           "tasks": [
             {
               "title": "Prova och driftsätt installationer",
+              "description": "När installationerna är färdigmonterade driftsätts och funktionsprovas vatten, spillvatten, el, ventilation och uppvärmning i den omfattning som gäller projektet. Kontrollera att systemen fungerar utan läckage eller andra fel och genomför föreskrivna mätningar och kontroller. Samla resultat, protokoll och intyg som underlag för slutkontroll och slutbesked.",
               "activities": [
                 {"title":"Driftsätt vatten och kontrollera läckage","type":"check"},
                 {"title":"Funktionsprova spillvatten","type":"check"},
@@ -694,6 +730,7 @@
           "tasks": [
             {
               "title": "Kontrollera färdig byggnad",
+              "description": "Gör en samlad funktions- och säkerhetskontroll när byggnaden i huvudsak är färdig. Kontrollera öppningsfunktioner, takavvattning, dagvatten, brand- och personsäkerhet samt de verifieringar som projektet kräver. Dokumentera kvarstående fel eller avvikelser så att de kan åtgärdas innan slutdokumentationen stängs.",
               "activities": [
                 {"title":"Kontrollera fönster och dörrars funktion","type":"check"},
                 {"title":"Kontrollera takavvattning och dagvattenfunktion","type":"check"},
@@ -716,6 +753,7 @@
           "tasks": [
             {
               "title": "Samla slutdokumentation",
+              "description": "Gå igenom projektet inför slutbesked och säkerställ att obligatoriska aktiviteter, kontroller, foton, mätvärden och styrande krav är hanterade. Samla intyg, protokoll, produktdokumentation och eventuella relationshandlingar och avsluta eller redovisa kvarstående avvikelser. Momentet är klart när slutunderlaget är sammanhållet och kan lämnas till KA eller byggnadsnämnden.",
               "activities": [
                 {"title":"Kontrollera att alla obligatoriska aktiviteter är slutförda","type":"check"},
                 {"title":"Kontrollera att styrande poster är mappade eller hanterade som undantag","type":"check"},
@@ -732,6 +770,7 @@
           "tasks": [
             {
               "title": "Förbered och avsluta slutbesked",
+              "description": "Förbered och lämna det underlag som krävs för slutsamråd eller slutbesked när byggnaden och slutdokumentationen är färdiga. Hantera eventuella kompletteringskrav från kommunen och registrera det slutliga beslutet i projektet. Avsluta ByggPlan-projektet först när slutbeskedet och den dokumentation som ska bevaras är på plats.",
               "activities": [
                 {"title":"Förbered underlag inför slutsamråd eller slutbesked","type":"document"},
                 {"title":"Genomför slutsamråd eller motsvarande avslutande kontroll","type":"approval"},
