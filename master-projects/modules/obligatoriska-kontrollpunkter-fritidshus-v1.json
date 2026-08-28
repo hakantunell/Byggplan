@@ -14,15 +14,10 @@
       ]
     },
     {
-      "target": "20.10/Förbered markarbete",
-      "activities": [
-        {"after":"Märk ut byggnad och kritiska nivåer","title":"Genomför föreskriven lägeskontroll","type":"measurement"},
-        {"after":"Genomför föreskriven lägeskontroll","title":"Spara mätintyg eller underlag från lägeskontroll","type":"document"}
-      ]
-    },
-    {
       "target": "20.40/Bygg grundkonstruktion",
       "activities": [
+        {"before":"Utför gjutning eller montage av grundkonstruktion","title":"Genomför föreskriven lägeskontroll","type":"measurement"},
+        {"after":"Genomför föreskriven lägeskontroll","title":"Spara mätintyg eller underlag från lägeskontroll","type":"document"},
         {"before":"Utför gjutning eller montage av grundkonstruktion","title":"Genomför KA-kontroll vid grundbotten före gjutning där kontrollplanen kräver det","type":"approval"},
         {"before":"Utför gjutning eller montage av grundkonstruktion","title":"Frigör grund för gjutning efter obligatoriska kontroller","type":"approval"}
       ]
