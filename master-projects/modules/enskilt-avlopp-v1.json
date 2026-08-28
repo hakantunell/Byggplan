@@ -1,7 +1,7 @@
 {
   "id": "enskilt-avlopp-v1",
   "name": "Enskilt avlopp",
-  "version": 1,
+  "version": 2,
   "targetWorkArea": "100",
   "scope": "Installation av slamavskiljare, ledningar och eventuell infiltration/markbädd fram till färdig myndighetsrapportering.",
   "principles": [
@@ -16,6 +16,7 @@
       "tasks": [
         {
           "title": "Förbered avloppsinstallationen",
+          "description": "Gå igenom avloppstillståndet, situationsplanen och de villkor som styr anläggningen innan markarbetet startar. Kontrollera placering, höjder, monteringsanvisningar och åtkomlighet för framtida drift och slamtömning samt klargör vem som ansvarar för utförandet. Momentet är klart när anläggningen kan sättas ut och schaktas enligt beslutad lösning.",
           "activities": [
             {"title":"Kontrollera tillstånd, situationsplan och villkor före start","type":"check"},
             {"title":"Kontrollera tillverkarens monteringsanvisningar","type":"check"},
@@ -32,6 +33,7 @@
       "tasks": [
         {
           "title": "Installera ledningar och brunnar",
+          "description": "Schakta och bygg ledningsbäddar och brunnsbottnar innan slamavskiljare, övriga brunnar och spillvattenledningar monteras. Kontrollera fall, dimensioner, höjder, anslutningar och täthet och dokumentera både brunnar och ledningar medan de är öppna. Genomför föreskriven inspektion innan schaktet frigörs för återfyllnad.",
           "activities": [
             {"title":"Schakta för ledningar och brunnar","type":"perform"},
             {"title":"Förbered ledningsbädd och brunnsbotten","type":"perform"},
@@ -55,6 +57,7 @@
       "tasks": [
         {
           "title": "Bygg infiltration eller markbädd",
+          "description": "Bygg infiltration eller markbädd enligt tillstånd och projekterad uppbyggnad från öppen schaktgrop till färdig anläggning. Kontrollera nivåer, lager, spridningsdelar och anslutningar och fotografera varje del innan nästa lager täcker den. Sluttäck och återställ marken först när anläggningen är dokumenterad och frigiven.",
           "activities": [
             {"title":"Fotografera tom schaktgrop före uppbyggnad","type":"document"},
             {"title":"Bygg föreskrivna lager och spridningsdelar","type":"perform"},
@@ -73,6 +76,7 @@
       "tasks": [
         {
           "title": "Slutrapportera avloppsanläggningen",
+          "description": "Samla den dokumentation som visar hur avloppsanläggningen faktiskt har utförts. Kontrollera att obligatoriska foton finns, fyll i entreprenörs- eller utföranderapport och skicka det underlag som myndigheten kräver. Spara tillstånd, rapport och fotodokumentation tillsammans med projektets övriga slutunderlag.",
           "activities": [
             {"title":"Ta översiktsbild som visar hus, brunn och infiltration eller anslutningspunkt","type":"document"},
             {"title":"Kontrollera att alla obligatoriska avloppsfoton finns","type":"check"},
