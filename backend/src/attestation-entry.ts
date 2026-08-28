@@ -1,6 +1,7 @@
 import app from './master-project-entry';
 import { registerGoverningAttestationRoutes } from './governing-attestation-routes';
 import { registerActivityOwnDocumentationRoutes } from './activity-own-documentation-routes';
+import { registerActivityCommentRoutes } from './activity-comment-routes';
 import { registerActivityMoveRoutes } from './activity-move-routes';
 import { registerProjectDocumentCategoryRoutes } from './project-document-category-routes';
 import { registerAuthRoutes } from './auth-routes';
@@ -15,6 +16,7 @@ import { registerGoverningVersionApplyRoutes } from './governing-version-apply-r
 registerAuthRoutes(app as any);
 registerGoverningAttestationRoutes(app as any);
 registerActivityOwnDocumentationRoutes(app as any);
+registerActivityCommentRoutes(app as any);
 registerActivityMoveRoutes(app as any);
 registerProjectDocumentCategoryRoutes(app as any);
 registerProjectInformationRoutes(app as any);
