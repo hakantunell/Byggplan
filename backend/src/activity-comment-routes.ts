@@ -34,7 +34,7 @@ export function registerActivityCommentRoutes(app:RouteApp){
     await ensureSchema(c.env.DB);
     const projectId=String(c.req.param('projectId'));
     const rows=await c.env.DB.prepare(`
-      SELECT ac.activity_id,ac.comment,ac.updated_at
+      SELECT ac.activity_id,a.title AS activity_title,ac.comment,ac.updated_at
       FROM activity_comments ac
       JOIN activities a ON a.id=ac.activity_id
       JOIN tasks t ON t.id=a.task_id
@@ -42,6 +42,6 @@ export function registerActivityCommentRoutes(app:RouteApp){
       JOIN work_areas wa ON wa.id=ws.work_area_id
       WHERE wa.project_id=? AND trim(ac.comment)<>''
     `).bind(projectId).all();
-    return c.json({ok:true,items:(rows.results as any[]).map(r=>({activityId:String(r.activity_id),comment:String(r.comment||''),updatedAt:r.updated_at||null}))});
+    return c.json({ok:true,items:(rows.results as any[]).map(r=>({activityId:String(r.activity_id),activityTitle:String(r.activity_title||''),comment:String(r.comment||''),updatedAt:r.updated_at||null}))});
   });
 }
