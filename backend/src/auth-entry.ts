@@ -2,7 +2,7 @@ import app from './attestation-entry';
 import {authConfigured,sessionUserFromRequest} from './auth-session';
 import {enrichPracticalGoverningInstructions} from './governing-practical-instruction-enrichment';
 
-// Governing document version comparison/activation routes are registered through attestation-entry.
+// Governing document version routes and project-structure create routes are registered through the entry chain.
 type Env={DB:D1Database;FILES:R2Bucket;DEV_USER_EMAIL:string;ALLOWED_ORIGIN?:string;AUTH_BOOTSTRAP_TOKEN?:string;[key:string]:unknown};
 
 export default {
