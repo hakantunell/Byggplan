@@ -150,18 +150,35 @@ export function registerGoverningDocumentRoutes(app: RouteApp) {
   app.get('/api/studio/projects/:projectId/governing-documents', async c => {
     await ensureGoverningDocumentSchema(c.env.DB);
     const projectId = c.req.param('projectId');
-    const rows = await c.env.DB.prepare(`
-      SELECT d.*,
-        (SELECT COUNT(*) FROM governing_items i WHERE i.governing_document_id=d.id) AS item_count,
-        (SELECT COUNT(*) FROM governing_items i WHERE i.governing_document_id=d.id AND i.handling_status IN ('handled','not_applicable','cannot_verify','alternative_evidence')) AS handled_count,
-        (SELECT COUNT(DISTINCT l.governing_item_id)
-           FROM governing_item_activity_links l
-           JOIN governing_items i ON i.id=l.governing_item_id
-          WHERE i.governing_document_id=d.id) AS linked_item_count
-      FROM governing_documents d
-      WHERE d.project_id=?
-      ORDER BY CASE d.document_type WHEN 'control_plan' THEN 0 ELSE 1 END,d.imported_at DESC,d.title
-    `).bind(projectId).all();
+    const hasContexts = await tableExists(c.env.DB, 'activity_contexts');
+    const rows = hasContexts
+      ? await c.env.DB.prepare(`
+          SELECT d.*,
+            (SELECT COUNT(*) FROM governing_items i WHERE i.governing_document_id=d.id) AS item_count,
+            (SELECT COUNT(*) FROM governing_items i WHERE i.governing_document_id=d.id AND i.handling_status IN ('handled','not_applicable','cannot_verify','alternative_evidence')) AS handled_count,
+            (SELECT COUNT(DISTINCT l.governing_item_id)
+               FROM governing_item_activity_links l
+               JOIN governing_items i ON i.id=l.governing_item_id
+               JOIN activities a ON a.id=l.activity_id
+               LEFT JOIN activity_contexts ac ON ac.activity_id=a.id
+              WHERE i.governing_document_id=d.id
+                AND COALESCE(ac.applicability,'always')<>'deprecated') AS linked_item_count
+          FROM governing_documents d
+          WHERE d.project_id=?
+          ORDER BY CASE d.document_type WHEN 'control_plan' THEN 0 ELSE 1 END,d.imported_at DESC,d.title
+        `).bind(projectId).all()
+      : await c.env.DB.prepare(`
+          SELECT d.*,
+            (SELECT COUNT(*) FROM governing_items i WHERE i.governing_document_id=d.id) AS item_count,
+            (SELECT COUNT(*) FROM governing_items i WHERE i.governing_document_id=d.id AND i.handling_status IN ('handled','not_applicable','cannot_verify','alternative_evidence')) AS handled_count,
+            (SELECT COUNT(DISTINCT l.governing_item_id)
+               FROM governing_item_activity_links l
+               JOIN governing_items i ON i.id=l.governing_item_id
+              WHERE i.governing_document_id=d.id) AS linked_item_count
+          FROM governing_documents d
+          WHERE d.project_id=?
+          ORDER BY CASE d.document_type WHEN 'control_plan' THEN 0 ELSE 1 END,d.imported_at DESC,d.title
+        `).bind(projectId).all();
     return c.json({ ok: true, documents: rows.results });
   });
 
@@ -170,13 +187,27 @@ export function registerGoverningDocumentRoutes(app: RouteApp) {
     const id = c.req.param('id');
     const document = await c.env.DB.prepare('SELECT * FROM governing_documents WHERE id=?').bind(id).first();
     if (!document) return c.json({ ok: false, error: 'Det styrande dokumentet hittades inte.' }, 404);
-    const items = await c.env.DB.prepare(`
-      SELECT i.*,
-        (SELECT COUNT(*) FROM governing_item_activity_links l WHERE l.governing_item_id=i.id) AS linked_activity_count
-      FROM governing_items i
-      WHERE i.governing_document_id=?
-      ORDER BY i.sort_order,i.id
-    `).bind(id).all();
+    const hasContexts = await tableExists(c.env.DB, 'activity_contexts');
+    const items = hasContexts
+      ? await c.env.DB.prepare(`
+          SELECT i.*,
+            (SELECT COUNT(*)
+               FROM governing_item_activity_links l
+               JOIN activities a ON a.id=l.activity_id
+               LEFT JOIN activity_contexts ac ON ac.activity_id=a.id
+              WHERE l.governing_item_id=i.id
+                AND COALESCE(ac.applicability,'always')<>'deprecated') AS linked_activity_count
+          FROM governing_items i
+          WHERE i.governing_document_id=?
+          ORDER BY i.sort_order,i.id
+        `).bind(id).all()
+      : await c.env.DB.prepare(`
+          SELECT i.*,
+            (SELECT COUNT(*) FROM governing_item_activity_links l WHERE l.governing_item_id=i.id) AS linked_activity_count
+          FROM governing_items i
+          WHERE i.governing_document_id=?
+          ORDER BY i.sort_order,i.id
+        `).bind(id).all();
     return c.json({ ok: true, document, items: items.results });
   });
 
@@ -250,17 +281,32 @@ export function registerGoverningDocumentRoutes(app: RouteApp) {
     `).bind(id).first<{ id: string; project_id: string }>();
     if (!item) return c.json({ ok: false, error: 'Den styrande posten hittades inte.' }, 404);
 
-    const activities = await c.env.DB.prepare(`
-      SELECT a.id,a.title,a.activity_type,t.title AS task_title,ws.name AS section_name,wa.name AS area_name,
-        CASE WHEN l.id IS NULL THEN 0 ELSE 1 END AS linked
-      FROM activities a
-      JOIN tasks t ON t.id=a.task_id
-      JOIN work_sections ws ON ws.id=t.work_section_id
-      JOIN work_areas wa ON wa.id=ws.work_area_id
-      LEFT JOIN governing_item_activity_links l ON l.activity_id=a.id AND l.governing_item_id=?
-      WHERE wa.project_id=?
-      ORDER BY wa.sort_order,ws.sort_order,t.sort_order,a.sort_order
-    `).bind(id,item.project_id).all();
+    const hasContexts = await tableExists(c.env.DB, 'activity_contexts');
+    const activities = hasContexts
+      ? await c.env.DB.prepare(`
+          SELECT a.id,a.title,a.activity_type,t.title AS task_title,ws.name AS section_name,wa.name AS area_name,
+            CASE WHEN l.id IS NULL THEN 0 ELSE 1 END AS linked
+          FROM activities a
+          JOIN tasks t ON t.id=a.task_id
+          JOIN work_sections ws ON ws.id=t.work_section_id
+          JOIN work_areas wa ON wa.id=ws.work_area_id
+          LEFT JOIN activity_contexts ac ON ac.activity_id=a.id
+          LEFT JOIN governing_item_activity_links l ON l.activity_id=a.id AND l.governing_item_id=?
+          WHERE wa.project_id=?
+            AND COALESCE(ac.applicability,'always')<>'deprecated'
+          ORDER BY wa.sort_order,ws.sort_order,t.sort_order,a.sort_order
+        `).bind(id,item.project_id).all()
+      : await c.env.DB.prepare(`
+          SELECT a.id,a.title,a.activity_type,t.title AS task_title,ws.name AS section_name,wa.name AS area_name,
+            CASE WHEN l.id IS NULL THEN 0 ELSE 1 END AS linked
+          FROM activities a
+          JOIN tasks t ON t.id=a.task_id
+          JOIN work_sections ws ON ws.id=t.work_section_id
+          JOIN work_areas wa ON wa.id=ws.work_area_id
+          LEFT JOIN governing_item_activity_links l ON l.activity_id=a.id AND l.governing_item_id=?
+          WHERE wa.project_id=?
+          ORDER BY wa.sort_order,ws.sort_order,t.sort_order,a.sort_order
+        `).bind(id,item.project_id).all();
     return c.json({ ok: true, activities: activities.results });
   });
 
@@ -277,16 +323,28 @@ export function registerGoverningDocumentRoutes(app: RouteApp) {
     if (!item) return c.json({ ok: false, error: 'Den styrande posten hittades inte.' }, 404);
 
     const requested = [...new Set((body.activityIds ?? []).map(clean).filter(Boolean))];
+    const hasContexts = await tableExists(c.env.DB, 'activity_contexts');
     await c.env.DB.prepare('DELETE FROM governing_item_activity_links WHERE governing_item_id=?').bind(id).run();
     for (const activityId of requested) {
-      const activity = await c.env.DB.prepare(`
-        SELECT a.id
-        FROM activities a
-        JOIN tasks t ON t.id=a.task_id
-        JOIN work_sections ws ON ws.id=t.work_section_id
-        JOIN work_areas wa ON wa.id=ws.work_area_id
-        WHERE a.id=? AND wa.project_id=?
-      `).bind(activityId,item.project_id).first();
+      const activity = hasContexts
+        ? await c.env.DB.prepare(`
+            SELECT a.id
+            FROM activities a
+            JOIN tasks t ON t.id=a.task_id
+            JOIN work_sections ws ON ws.id=t.work_section_id
+            JOIN work_areas wa ON wa.id=ws.work_area_id
+            LEFT JOIN activity_contexts ac ON ac.activity_id=a.id
+            WHERE a.id=? AND wa.project_id=?
+              AND COALESCE(ac.applicability,'always')<>'deprecated'
+          `).bind(activityId,item.project_id).first()
+        : await c.env.DB.prepare(`
+            SELECT a.id
+            FROM activities a
+            JOIN tasks t ON t.id=a.task_id
+            JOIN work_sections ws ON ws.id=t.work_section_id
+            JOIN work_areas wa ON wa.id=ws.work_area_id
+            WHERE a.id=? AND wa.project_id=?
+          `).bind(activityId,item.project_id).first();
       if (!activity) continue;
       await c.env.DB.prepare(`
         INSERT OR IGNORE INTO governing_item_activity_links(id,governing_item_id,activity_id,link_type)
