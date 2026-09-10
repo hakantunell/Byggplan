@@ -1,7 +1,7 @@
 import app from './attestation-entry';
 import {authConfigured,sessionUserFromRequest} from './auth-session';
 import {enrichPracticalGoverningInstructions} from './governing-practical-instruction-enrichment';
-import {canAccessProject,ensureWorkspaceSchema,isSystemAdmin,projectIdFromRequest} from './workspace-access';
+import {canAccessProject,canAdminWorkspace,ensureWorkspaceSchema,isSystemAdmin,projectIdFromRequest} from './workspace-access';
 
 // Governing document version comparison/activation routes are registered through attestation-entry.
 type Env={DB:D1Database;FILES:R2Bucket;DEV_USER_EMAIL:string;ALLOWED_ORIGIN?:string;AUTH_BOOTSTRAP_TOKEN?:string;[key:string]:unknown};
@@ -92,6 +92,10 @@ export default {
   }
   const scopedProjectId=await projectIdFromRequest(env.DB,request);
   if(scopedProjectId&&!await canAccessProject(env.DB,user,scopedProjectId))return jsonResponse({ok:false,error:'Du har inte åtkomst till den här projektytan eller projektet.'},403);
+  if(request.method==='POST'&&/^\/api\/studio\/master-projects\/[^/]+\/create-project$/.test(url.pathname)&&!systemAdmin){
+   const body=await request.clone().json().catch(()=>({})) as any;const workspaceId=String(body?.workspaceId||'');
+   if(!workspaceId||!await canAdminWorkspace(env.DB,user,workspaceId))return jsonResponse({ok:false,error:'Du får bara skapa projekt i en projektyta som du administrerar.'},403);
+  }
   if(request.method==='GET'&&url.pathname==='/api/tasks'&&!url.searchParams.get('projectId')&&!systemAdmin)return jsonResponse({ok:false,error:'projectId krävs för projektavgränsad åtkomst.'},400);
   if(request.method==='POST'&&url.pathname==='/api/studio/tasks')return createTaskDirect(request,env);
   const governingListMatch=request.method==='GET'?url.pathname.match(/^\/api\/studio\/projects\/([^/]+)\/governing-documents$/):null;

@@ -39,11 +39,13 @@ export async function ensureWorkspaceSchema(db:D1Database){
   try{await db.prepare('ALTER TABLE projects ADD COLUMN workspace_id TEXT').run()}catch{}
  }
  try{
-  const admins=await db.prepare(`SELECT u.id,u.email,u.display_name FROM users u JOIN global_user_roles g ON g.user_id=u.id WHERE g.role_code='admin' AND u.status='active' ORDER BY u.created_at`).all();
-  for(const row of admins.results as any[]){
-   const email=String(row.email||'').trim().toLowerCase();if(!email)continue;
-   await db.prepare('INSERT OR IGNORE INTO system_admin_emails(email,user_id,added_by) VALUES(?,?,?)').bind(email,String(row.id),String(row.id)).run();
-   await db.prepare('UPDATE system_admin_emails SET user_id=? WHERE email=? AND user_id IS NULL').bind(String(row.id),email).run();
+  const seeded=await db.prepare('SELECT COUNT(*) count FROM system_admin_emails').first<any>();
+  if(Number(seeded?.count||0)===0){
+   const admins=await db.prepare(`SELECT u.id,u.email,u.display_name FROM users u JOIN global_user_roles g ON g.user_id=u.id WHERE g.role_code='admin' AND u.status='active' ORDER BY u.created_at`).all();
+   for(const row of admins.results as any[]){
+    const email=String(row.email||'').trim().toLowerCase();if(!email)continue;
+    await db.prepare('INSERT OR IGNORE INTO system_admin_emails(email,user_id,added_by) VALUES(?,?,?)').bind(email,String(row.id),String(row.id)).run();
+   }
   }
  }catch{}
  const wc=await db.prepare('SELECT COUNT(*) count FROM workspaces').first<any>();
