@@ -13,9 +13,11 @@ import { registerProjectExecutionResetRoutes } from './project-execution-reset-r
 import { registerGoverningDocumentVersionRoutes } from './governing-document-version-routes';
 import { registerGoverningVersionDecisionRoutes } from './governing-version-decision-routes';
 import { registerGoverningVersionApplyRoutes } from './governing-version-apply-routes';
+import { registerWorkspaceRoutes } from './workspace-routes';
 
 registerAuthRoutes(app as any);
 registerAuthPasswordRoutes(app as any);
+registerWorkspaceRoutes(app as any);
 registerGoverningAttestationRoutes(app as any);
 registerActivityOwnDocumentationRoutes(app as any);
 registerActivityCommentRoutes(app as any);
