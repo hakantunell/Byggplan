@@ -38,8 +38,6 @@ export async function ensureWorkspaceSchema(db:D1Database){
  if(!await columnExists(db,'projects','workspace_id')){
   try{await db.prepare('ALTER TABLE projects ADD COLUMN workspace_id TEXT').run()}catch{}
  }
-
- // Existing global administrators become initial system administrators.
  try{
   const admins=await db.prepare(`SELECT u.id,u.email,u.display_name FROM users u JOIN global_user_roles g ON g.user_id=u.id WHERE g.role_code='admin' AND u.status='active' ORDER BY u.created_at`).all();
   for(const row of admins.results as any[]){
@@ -48,7 +46,6 @@ export async function ensureWorkspaceSchema(db:D1Database){
    await db.prepare('UPDATE system_admin_emails SET user_id=? WHERE email=? AND user_id IS NULL').bind(String(row.id),email).run();
   }
  }catch{}
-
  const wc=await db.prepare('SELECT COUNT(*) count FROM workspaces').first<any>();
  if(Number(wc?.count||0)===0){
   const pc=await db.prepare('SELECT COUNT(*) count FROM projects').first<any>();
@@ -62,8 +59,6 @@ export async function ensureWorkspaceSchema(db:D1Database){
    if(admin?.id)await db.prepare(`INSERT OR IGNORE INTO workspace_members(workspace_id,user_id,role,status) VALUES(?,?,'workspace_admin','active')`).bind(id,String(admin.id)).run();
   }
  }
-
- // Preserve existing project users by placing them in the owning workspace.
  try{
   await db.prepare(`INSERT OR IGNORE INTO workspace_members(workspace_id,user_id,role,status)
    SELECT DISTINCT p.workspace_id,pm.user_id,'member','active'
@@ -112,11 +107,12 @@ export async function userWorkspaceProfile(db:D1Database,user:AuthUser){
  return{systemAdmin,workspaces};
 }
 
+async function lookupProject(db:D1Database,sql:string,id:string){try{const row=await db.prepare(sql).bind(id).first<any>();return row?.project_id?String(row.project_id):null}catch{return null}}
+
 export async function projectIdFromRequest(db:D1Database,request:Request):Promise<string|null>{
  const url=new URL(request.url);
  const q=url.searchParams.get('projectId');if(q)return q;
  let m=url.pathname.match(/^\/api\/studio\/projects\/([^/]+)/)||url.pathname.match(/^\/api\/projects\/([^/]+)/);if(m)return decodeURIComponent(m[1]);
- // Resource routes that do not expose projectId directly.
  const lookups:Array<[RegExp,string]>= [
   [/^\/api\/(?:studio\/)?project-documents\/([^/]+)/,'SELECT project_id FROM project_documents WHERE id=?'],
   [/^\/api\/(?:studio\/)?project-document-files\/([^/]+)/,'SELECT project_id FROM project_document_attachments WHERE id=?'],
@@ -124,9 +120,16 @@ export async function projectIdFromRequest(db:D1Database,request:Request):Promis
   [/^\/api\/activities\/([^/]+)/,`SELECT wa.project_id FROM activities a JOIN tasks t ON t.id=a.task_id JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id WHERE a.id=?`],
   [/^\/api\/tasks\/([^/]+)/,`SELECT wa.project_id FROM tasks t JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id WHERE t.id=?`]
  ];
- for(const [re,sql] of lookups){m=url.pathname.match(re);if(!m)continue;try{const row=await db.prepare(sql).bind(decodeURIComponent(m[1])).first<any>();if(row?.project_id)return String(row.project_id)}catch{} }
+ for(const [re,sql] of lookups){m=url.pathname.match(re);if(!m)continue;const id=await lookupProject(db,sql,decodeURIComponent(m[1]));if(id)return id}
  if(request.method!=='GET'&&request.headers.get('content-type')?.includes('application/json')){
-  try{const body=await request.clone().json() as any;if(body?.projectId)return String(body.projectId)}catch{}
+  try{
+   const body=await request.clone().json() as any;
+   if(body?.projectId)return String(body.projectId);
+   if(body?.workSectionId){const id=await lookupProject(db,`SELECT wa.project_id FROM work_sections ws JOIN work_areas wa ON wa.id=ws.work_area_id WHERE ws.id=?`,String(body.workSectionId));if(id)return id}
+   if(body?.taskId){const id=await lookupProject(db,`SELECT wa.project_id FROM tasks t JOIN work_sections ws ON ws.id=t.work_section_id JOIN work_areas wa ON wa.id=ws.work_area_id WHERE t.id=?`,String(body.taskId));if(id)return id}
+   if(body?.documentId){const id=await lookupProject(db,'SELECT project_id FROM project_documents WHERE id=?',String(body.documentId));if(id)return id}
+   if(body?.governingDocumentId){const id=await lookupProject(db,'SELECT project_id FROM governing_documents WHERE id=?',String(body.governingDocumentId));if(id)return id}
+  }catch{}
  }
  return null;
 }
