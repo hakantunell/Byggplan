@@ -34,20 +34,32 @@ export async function ensureWorkspaceSchema(db:D1Database){
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
  )`).run();
+ await db.prepare(`CREATE TABLE IF NOT EXISTS workspace_schema_meta(
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+ )`).run();
  await db.prepare('CREATE INDEX IF NOT EXISTS idx_workspace_members_user ON workspace_members(user_id,status)').run();
  if(!await columnExists(db,'projects','workspace_id')){
   try{await db.prepare('ALTER TABLE projects ADD COLUMN workspace_id TEXT').run()}catch{}
  }
+
+ // One-time repair/migration: every legacy active global admin that existed before
+ // workspaces were introduced becomes an initial system administrator. The marker
+ // prevents a user removed later in System administration from being re-added.
  try{
-  const seeded=await db.prepare('SELECT COUNT(*) count FROM system_admin_emails').first<any>();
-  if(Number(seeded?.count||0)===0){
-   const admins=await db.prepare(`SELECT u.id,u.email,u.display_name FROM users u JOIN global_user_roles g ON g.user_id=u.id WHERE g.role_code='admin' AND u.status='active' ORDER BY u.created_at`).all();
+  const migrationKey='seed_legacy_global_admins_v2';
+  const migrated=await db.prepare('SELECT 1 ok FROM workspace_schema_meta WHERE key=?').bind(migrationKey).first();
+  if(!migrated){
+   const admins=await db.prepare(`SELECT DISTINCT u.id,u.email FROM users u JOIN global_user_roles g ON g.user_id=u.id LEFT JOIN user_credentials cr ON cr.user_id=u.id WHERE g.role_code='admin' AND u.status='active' AND cr.user_id IS NOT NULL ORDER BY u.created_at`).all();
    for(const row of admins.results as any[]){
     const email=String(row.email||'').trim().toLowerCase();if(!email)continue;
-    await db.prepare('INSERT OR IGNORE INTO system_admin_emails(email,user_id,added_by) VALUES(?,?,?)').bind(email,String(row.id),String(row.id)).run();
+    await db.prepare(`INSERT INTO system_admin_emails(email,user_id,added_by) VALUES(?,?,?) ON CONFLICT(email) DO UPDATE SET user_id=excluded.user_id`).bind(email,String(row.id),String(row.id)).run();
    }
+   await db.prepare(`INSERT INTO workspace_schema_meta(key,value,updated_at) VALUES(?, 'done', datetime('now'))`).bind(migrationKey).run();
   }
- }catch{}
+ }catch(error){console.error('Legacy system administrator migration failed',error)}
+
  const wc=await db.prepare('SELECT COUNT(*) count FROM workspaces').first<any>();
  if(Number(wc?.count||0)===0){
   const pc=await db.prepare('SELECT COUNT(*) count FROM projects').first<any>();
