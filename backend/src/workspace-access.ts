@@ -44,17 +44,26 @@ export async function ensureWorkspaceSchema(db:D1Database){
   try{await db.prepare('ALTER TABLE projects ADD COLUMN workspace_id TEXT').run()}catch{}
  }
 
- // One-time repair/migration: every legacy active global admin that existed before
- // workspaces were introduced becomes an initial system administrator. The marker
- // prevents a user removed later in System administration from being re-added.
+ // One-time repair/migration: every legacy active global admin with a real login
+ // becomes an initial system administrator. v3 deliberately has a fresh marker so
+ // installations that already ran the earlier faulty migration get one clean retry.
+ // After v3 has run, removing a system administrator in System administration will
+ // remain permanent and will not be undone by later requests.
  try{
-  const migrationKey='seed_legacy_global_admins_v2';
+  const migrationKey='seed_legacy_global_admins_v3';
   const migrated=await db.prepare('SELECT 1 ok FROM workspace_schema_meta WHERE key=?').bind(migrationKey).first();
   if(!migrated){
-   const admins=await db.prepare(`SELECT DISTINCT u.id,u.email FROM users u JOIN global_user_roles g ON g.user_id=u.id LEFT JOIN user_credentials cr ON cr.user_id=u.id WHERE g.role_code='admin' AND u.status='active' AND cr.user_id IS NOT NULL ORDER BY u.created_at`).all();
+   const admins=await db.prepare(`SELECT DISTINCT u.id,u.email
+    FROM users u
+    JOIN global_user_roles g ON g.user_id=u.id
+    JOIN user_credentials cr ON cr.user_id=u.id
+    WHERE g.role_code='admin' AND u.status='active'
+    ORDER BY u.created_at`).all();
    for(const row of admins.results as any[]){
     const email=String(row.email||'').trim().toLowerCase();if(!email)continue;
-    await db.prepare(`INSERT INTO system_admin_emails(email,user_id,added_by) VALUES(?,?,?) ON CONFLICT(email) DO UPDATE SET user_id=excluded.user_id`).bind(email,String(row.id),String(row.id)).run();
+    await db.prepare(`INSERT INTO system_admin_emails(email,user_id,added_by)
+      VALUES(?,?,?)
+      ON CONFLICT(email) DO UPDATE SET user_id=excluded.user_id`).bind(email,String(row.id),String(row.id)).run();
    }
    await db.prepare(`INSERT INTO workspace_schema_meta(key,value,updated_at) VALUES(?, 'done', datetime('now'))`).bind(migrationKey).run();
   }
