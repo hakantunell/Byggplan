@@ -5,6 +5,7 @@ import { registerActivityCommentRoutes } from './activity-comment-routes';
 import { registerActivityMoveRoutes } from './activity-move-routes';
 import { registerProjectDocumentCategoryRoutes } from './project-document-category-routes';
 import { registerAuthRoutes } from './auth-routes';
+import { registerAuthPasswordRoutes } from './auth-password-routes';
 import { registerProjectInformationRoutes } from './project-information-routes';
 import { registerProjectBackupRoutes } from './project-backup-routes';
 import { registerSystemBackupRoutes } from './system-backup-routes';
@@ -14,6 +15,7 @@ import { registerGoverningVersionDecisionRoutes } from './governing-version-deci
 import { registerGoverningVersionApplyRoutes } from './governing-version-apply-routes';
 
 registerAuthRoutes(app as any);
+registerAuthPasswordRoutes(app as any);
 registerGoverningAttestationRoutes(app as any);
 registerActivityOwnDocumentationRoutes(app as any);
 registerActivityCommentRoutes(app as any);
