@@ -121,13 +121,20 @@ export async function canAccessProject(db:D1Database,user:AuthUser,projectId:str
 }
 
 export async function userWorkspaceProfile(db:D1Database,user:AuthUser){
- await ensureWorkspaceSchema(db);
- const systemAdmin=await isSystemAdmin(db,user);
- const rows=systemAdmin
-  ? await db.prepare(`SELECT w.id,w.name,w.status,'system_admin' role FROM workspaces w WHERE w.status='active' ORDER BY w.name`).all()
-  : await db.prepare(`SELECT w.id,w.name,w.status,wm.role FROM workspace_members wm JOIN workspaces w ON w.id=wm.workspace_id WHERE wm.user_id=? AND wm.status='active' AND w.status='active' ORDER BY w.name`).bind(user.id).all();
- const workspaces=(rows.results as any[]).map(r=>({id:String(r.id),name:String(r.name),role:String(r.role)}));
- return{systemAdmin,workspaces};
+ try{
+  await ensureWorkspaceSchema(db);
+  const email=String(user.email||'').trim().toLowerCase();
+  const adminRow=await db.prepare('SELECT 1 ok FROM system_admin_emails WHERE lower(email)=?').bind(email).first();
+  const systemAdmin=Boolean(adminRow);
+  const rows=systemAdmin
+   ? await db.prepare(`SELECT w.id,w.name,w.status,'system_admin' role FROM workspaces w WHERE w.status='active' ORDER BY w.name`).all()
+   : await db.prepare(`SELECT w.id,w.name,w.status,wm.role FROM workspace_members wm JOIN workspaces w ON w.id=wm.workspace_id WHERE wm.user_id=? AND wm.status='active' AND w.status='active' ORDER BY w.name`).bind(user.id).all();
+  const workspaces=(rows.results as any[]).map(r=>({id:String(r.id),name:String(r.name),role:String(r.role)}));
+  return{systemAdmin,workspaces};
+ }catch(error){
+  console.error('Workspace profile lookup failed; continuing authentication without workspace profile',error);
+  return{systemAdmin:false,workspaces:[] as Array<{id:string;name:string;role:string}>};
+ }
 }
 
 async function lookupProject(db:D1Database,sql:string,id:string){try{const row=await db.prepare(sql).bind(id).first<any>();return row?.project_id?String(row.project_id):null}catch{return null}}
