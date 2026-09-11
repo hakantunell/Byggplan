@@ -1,0 +1,32 @@
+name: Apply auth profile resilience patch
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - backend/scripts/apply_auth_profile_resilience_patch.py
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply patch
+        run: python backend/scripts/apply_auth_profile_resilience_patch.py
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify backend worker compiles
+        working-directory: backend
+        run: npx wrangler deploy --dry-run
+      - name: Commit result
+        run: |
+          git config user.name byggplan-bot
+          git config user.email byggplan-bot@users.noreply.github.com
+          rm backend/scripts/apply_auth_profile_resilience_patch.py
+          rm .github/workflows/apply-auth-profile-resilience-patch.yml
+          git add backend/src/auth-routes.ts backend/scripts/apply_auth_profile_resilience_patch.py .github/workflows/apply-auth-profile-resilience-patch.yml
+          git commit -m "Make login resilient to profile lookup failures"
+          git push
