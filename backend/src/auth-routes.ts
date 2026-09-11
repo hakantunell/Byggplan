@@ -5,16 +5,27 @@ type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void;post:(path:strin
 const MEMBER_ROLES=new Set(['BH','KA','worker','supervisor']);
 
 async function userProfile(c:any,user:any){
- await ensureWorkspaceSchema(c.env.DB);
- const global=await c.env.DB.prepare('SELECT role_code FROM global_user_roles WHERE user_id=? ORDER BY role_code').bind(user.id).all();
+ let globalRoles:string[]=[];
+ try{
+  const global=await c.env.DB.prepare('SELECT role_code FROM global_user_roles WHERE user_id=? ORDER BY role_code').bind(user.id).all();
+  globalRoles=(global.results as any[]).map(r=>String(r.role_code));
+ }catch(error){console.error('Global role lookup failed while building auth profile',error)}
  const workspaceProfile=await userWorkspaceProfile(c.env.DB,user);
- const memberships=workspaceProfile.systemAdmin
-  ? await c.env.DB.prepare(`SELECT p.id project_id,p.name project_name,p.workspace_id,w.name workspace_name FROM projects p LEFT JOIN workspaces w ON w.id=p.workspace_id WHERE p.status='active' ORDER BY w.name,p.sort_order,p.name`).all()
-  : await c.env.DB.prepare(`SELECT DISTINCT p.id project_id,p.name project_name,p.workspace_id,w.name workspace_name FROM projects p JOIN workspaces w ON w.id=p.workspace_id JOIN workspace_members wm ON wm.workspace_id=w.id WHERE wm.user_id=? AND wm.status='active' AND w.status='active' AND p.status='active' ORDER BY w.name,p.sort_order,p.name`).bind(user.id).all();
- const roles=await c.env.DB.prepare('SELECT project_id,role_code FROM project_member_roles WHERE user_id=? ORDER BY project_id,role_code').bind(user.id).all();
- const byProject=new Map<string,string[]>();for(const row of roles.results as any[]){const list=byProject.get(String(row.project_id))||[];list.push(String(row.role_code));byProject.set(String(row.project_id),list)}
- return{id:user.id,email:user.email,displayName:user.display_name,globalRoles:(global.results as any[]).map(r=>String(r.role_code)),systemAdmin:workspaceProfile.systemAdmin,workspaces:workspaceProfile.workspaces,projects:(memberships.results as any[]).map(r=>({id:String(r.project_id),name:String(r.project_name),workspaceId:r.workspace_id?String(r.workspace_id):'',workspaceName:r.workspace_name?String(r.workspace_name):'',roles:byProject.get(String(r.project_id))||[]}))};
+ let membershipRows:any[]=[];
+ try{
+  const memberships=workspaceProfile.systemAdmin
+   ? await c.env.DB.prepare(`SELECT p.id project_id,p.name project_name,p.workspace_id,w.name workspace_name FROM projects p LEFT JOIN workspaces w ON w.id=p.workspace_id WHERE p.status='active' ORDER BY w.name,p.sort_order,p.name`).all()
+   : await c.env.DB.prepare(`SELECT DISTINCT p.id project_id,p.name project_name,p.workspace_id,w.name workspace_name FROM projects p JOIN workspaces w ON w.id=p.workspace_id JOIN workspace_members wm ON wm.workspace_id=w.id WHERE wm.user_id=? AND wm.status='active' AND w.status='active' AND p.status='active' ORDER BY w.name,p.sort_order,p.name`).bind(user.id).all();
+  membershipRows=memberships.results as any[];
+ }catch(error){console.error('Project membership lookup failed while building auth profile',error)}
+ const byProject=new Map<string,string[]>();
+ try{
+  const roles=await c.env.DB.prepare('SELECT project_id,role_code FROM project_member_roles WHERE user_id=? ORDER BY project_id,role_code').bind(user.id).all();
+  for(const row of roles.results as any[]){const list=byProject.get(String(row.project_id))||[];list.push(String(row.role_code));byProject.set(String(row.project_id),list)}
+ }catch(error){console.error('Project role lookup failed while building auth profile',error)}
+ return{id:user.id,email:user.email,displayName:user.display_name,globalRoles,systemAdmin:workspaceProfile.systemAdmin,workspaces:workspaceProfile.workspaces,projects:membershipRows.map(r=>({id:String(r.project_id),name:String(r.project_name),workspaceId:r.workspace_id?String(r.workspace_id):'',workspaceName:r.workspace_name?String(r.workspace_name):'',roles:byProject.get(String(r.project_id))||[]}))};
 }
+
 async function ensureProjectRoleCatalog(db:D1Database){await db.prepare(`INSERT OR IGNORE INTO roles(code,name,description) VALUES('BH','Byggherre','Projektets byggherre och ansvarig för byggherrekontroller.')`).run();await db.prepare(`INSERT OR IGNORE INTO roles(code,name,description) VALUES('KA','Kontrollansvarig','Projektets kontrollansvarige med behörighet att KA-signera kontrollplanen.')`).run()}
 async function requireAdmin(c:any,projectId?:string){const user=await sessionUser(c);if(!user)return null;await ensureWorkspaceSchema(c.env.DB);if(await isSystemAdmin(c.env.DB,user))return user;if(projectId){const row=await c.env.DB.prepare('SELECT workspace_id FROM projects WHERE id=?').bind(projectId).first<any>();if(row?.workspace_id&&await canAdminWorkspace(c.env.DB,user,String(row.workspace_id)))return user}return null}
 function normalizedRoles(value:unknown){return [...new Set((Array.isArray(value)?value:[]).map(v=>String(v).trim()).filter(v=>MEMBER_ROLES.has(v)))]}
