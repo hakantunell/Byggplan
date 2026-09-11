@@ -17,7 +17,7 @@ jobs:
       - name: Apply patch
         run: python backend/scripts/apply_auth_profile_resilience_patch.py
       - name: Install dependencies
-        run: npm ci
+        run: npm install --no-audit --no-fund
       - name: Verify backend worker compiles
         working-directory: backend
         run: npx wrangler deploy --dry-run
