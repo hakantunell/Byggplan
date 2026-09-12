@@ -7,7 +7,7 @@ type ControlItem={
   responsibleRole:string;evidenceRequired:string;sourcePage:number;sourceQuote:string;action:string;timing:string;
 };
 
-const CONTROL_PLAN_VISION_MODEL='@cf/google/gemma-4-26b-a4b-it';
+const CONTROL_PLAN_VISION_MODEL='@cf/moondream/moondream3.1-9B-A2B';
 
 function clean(value:unknown){return typeof value==='string'?value.trim():''}
 function plain(value:string){
@@ -109,45 +109,29 @@ async function renderPdfPages(browserBinding:any,pdfBytes:ArrayBuffer,maxPages=2
   }finally{await browser.close().catch(()=>undefined)}
 }
 
-function visionOutputText(response:any){
-  if(typeof response?.response==='string'&&response.response.trim())return response.response.trim();
-  if(typeof response?.output_text==='string'&&response.output_text.trim())return response.output_text.trim();
-  const choice=response?.choices?.[0]?.message?.content;
-  if(typeof choice==='string'&&choice.trim())return choice.trim();
-  return '';
-}
-
-const TRANSCRIPTION_PROMPT=`Du transkriberar en sida ur en svensk kontrollplan för byggprojekt.
-Din uppgift är INTE att sammanfatta, beskriva eller tolka sidan. Återge allt relevant synligt innehåll så troget som möjligt som Markdown.
-
-Regler:
-- Transkribera VARJE tabellrad. Hoppa aldrig över en rad även om den liknar andra rader.
-- Slå aldrig ihop flera kontrollpunkter.
-- Bevara originalspråket. Översätt inte svenska termer till engelska.
-- Bevara nummer/koder exakt, t.ex. 1.1, 1.2, 2.3.
-- Bevara tabellens kolumner och deras ordning som en Markdown-tabell.
-- Bevara rubriker som Markdown-rubriker.
-- Bevara punktlistor, särskilt handlingar, intyg, foton eller dokument som ska lämnas in.
-- Tomma signatur- och anmärkningsfält får utelämnas, men inga kontrollpunkter eller sakuppgifter får utelämnas.
-- Lägg inte till förklaringar, översättningar, kommentarer eller en "Document Overview".
-
+const TRANSCRIPTION_PROMPT=`Transkribera denna sida ur en svensk kontrollplan till Markdown. Sammanfatta inte och tolka inte.
+- Återge varje tabellrad, även om flera rader liknar varandra.
+- Slå aldrig ihop kontrollpunkter.
+- Bevara svenska originalord och nummer/koder exakt, t.ex. 1.1, 1.2, 2.3.
+- Återge tabeller som riktiga Markdown-tabeller med alla synliga sakuppgiftskolumner.
+- Bevara rubriker och punktlistor.
+- Tomma signatur- och anmärkningsfält får utelämnas.
+- Lägg inte till förklaringar, översättningar eller dokumentöversikt.
 Returnera endast transkriberad Markdown.`;
 
 async function transcribeWithVisionModel(ai:any,image:ArrayBuffer,page:number){
   const imageData=`data:image/png;base64,${bytesToBase64(image)}`;
   const response=await ai.run(CONTROL_PLAN_VISION_MODEL,{
-    messages:[
-      {role:'system',content:'Du är en exakt OCR- och dokumenttranskriptionsmotor. Följ instruktionen ordagrant och sammanfatta aldrig.'},
-      {role:'user',content:TRANSCRIPTION_PROMPT}
-    ],
+    task:'query',
     image:imageData,
+    question:TRANSCRIPTION_PROMPT,
+    reasoning:false,
     temperature:0,
-    max_completion_tokens:7000
+    max_tokens:7000
   }) as any;
-  const text=visionOutputText(response);
-  if(!text)throw new Error(`Visionmodellen gav ingen transkription för sida ${page}.`);
-  const tokens=Number(response?.usage?.total_tokens||response?.usage?.output_tokens||0);
-  return {text,tokens,source:'instructed-vision'};
+  const text=clean(response?.answer);
+  if(!text)throw new Error(`OCR-modellen gav ingen transkription för sida ${page}.`);
+  return {text,tokens:0,source:'moondream-ocr'};
 }
 
 async function fallbackToMarkdown(ai:any,image:ArrayBuffer,page:number){
@@ -157,11 +141,11 @@ async function fallbackToMarkdown(ai:any,image:ArrayBuffer,page:number){
 }
 
 async function transcribePage(ai:any,image:ArrayBuffer,page:number){
-  try{return await transcribeWithVisionModel(ai,image,page)}
-  catch(error){
-    console.warn('Instructed control-plan vision transcription failed; using toMarkdown fallback',{page,error});
-    return fallbackToMarkdown(ai,image,page);
-  }
+  try{
+    const primary=await transcribeWithVisionModel(ai,image,page);
+    if(parseControlPlanMarkdownPage(primary.text,page).length>0||!/(kontrollpunkt|kontrolleras av|moment)/i.test(primary.text))return primary;
+  }catch(error){console.warn('Moondream control-plan OCR failed',{page,error})}
+  return fallbackToMarkdown(ai,image,page);
 }
 
 async function addColumnIfMissing(db:D1Database,sql:string){try{await db.prepare(sql).run()}catch(error){const m=error instanceof Error?error.message:String(error);if(!m.toLowerCase().includes('duplicate column'))throw error}}
@@ -200,6 +184,6 @@ export async function analyzeControlPlanDeterministically(env:Env,documentId:str
   await env.DB.prepare("UPDATE governing_documents SET status='active',updated_at=datetime('now') WHERE id=?").bind(documentId).run();
   const controlCount=items.filter(x=>x.itemType==='control').length;const documentationCount=items.filter(x=>x.itemType==='documentation').length;
   const summary=`Kontrollplan: ${controlCount} kontrollpunkter och ${documentationCount} dokumentationspunkter extraherade radvis.`;
-  await env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,'${CONTROL_PLAN_VISION_MODEL}','completed',?,?)`).bind(crypto.randomUUID(),documentId,'control-plan-table-parser-v3',summary,items.length).run();
-  return {ok:true,id:documentId,createdItems:items.length,provider:'workers-ai',analyzer:'control-plan-table-parser-v3',model:CONTROL_PLAN_VISION_MODEL,documentSummary:summary,conversionTokens,conversionMode:'pdf-instructed-vision-table-parser',renderedPages:images.length,pageResults,conversionQuality:'Varje PDF-sida transkriberas en gång med explicit OCR/tabellinstruktion; toMarkdown används endast som teknisk fallback vid visionsfel'};
+  await env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,'${CONTROL_PLAN_VISION_MODEL}','completed',?,?)`).bind(crypto.randomUUID(),documentId,'control-plan-table-parser-v4',summary,items.length).run();
+  return {ok:true,id:documentId,createdItems:items.length,provider:'workers-ai',analyzer:'control-plan-table-parser-v4',model:CONTROL_PLAN_VISION_MODEL,documentSummary:summary,conversionTokens,conversionMode:'pdf-fast-ocr-table-parser',renderedPages:images.length,pageResults,conversionQuality:'Varje PDF-sida OCR-tolkas en gång med Moondream; toMarkdown används bara när OCR-resultatet inte går att tabellparsa'};
 }
