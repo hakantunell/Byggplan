@@ -49,6 +49,9 @@ export function registerOpenApiRoutes(app:RouteApp){
       '/api/studio/governing-documents/{id}':{
         get:{tags:['Styrdokument'],summary:'Läs styrdokument med alla poster',description:'Returnerar styrdokumentets metadata och alla analyserade styrposter i sorteringsordning, inklusive antal kopplade aktiviteter.',parameters:[documentId],responses:{'200':ok}}
       },
+      '/api/studio/governing-documents/{id}/analyze-generic':{
+        post:{tags:['Styrdokument'],summary:'Kör generell AI-analys av styrdokument',description:'Kör den generella AI-analysen direkt mot originalfilen utan fallback. Används bland annat för diagnostik av modell-, API- eller konfigurationsfel.',parameters:[documentId],responses:{'200':ok,'400':ok,'404':ok,'409':ok,'500':ok,'503':ok}}
+      },
       '/api/studio/projects/{projectId}/governing-mapping':{
         get:{tags:['Styrdokument'],summary:'Läs kartläggning mot styrdokument',parameters:[projectId],responses:{'200':ok}}
       },
