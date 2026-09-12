@@ -1,3 +1,5 @@
+import puppeteer from '@cloudflare/puppeteer';
+
 type RouteApp={post:(path:string,handler:(c:any)=>unknown)=>void};
 
 type AiItem={
@@ -18,6 +20,7 @@ type AiItem={
 
 type AiAnalysis={documentSummary:string;items:AiItem[]};
 type AiProvider='workers-ai'|'openai';
+type ConversionResult={text:string;tokens:number;mode:'markdown'|'pdf-vision';renderedPages:number;qualityReason:string};
 
 function clean(value:unknown){return typeof value==='string'?value.trim():''}
 function clampConfidence(value:unknown){const n=Number(value);if(!Number.isFinite(n))return 0;return Math.max(0,Math.min(1,n))}
@@ -153,15 +156,15 @@ async function analyzeWithOpenAI(apiKey:string,model:string,fileId:string,isImag
   return {documentSummary:clean(parsed?.documentSummary),items:Array.isArray(parsed?.items)?parsed.items:[]};
 }
 
-async function convertDocumentWithWorkersAi(ai:any,object:R2ObjectBody,filename:string,contentType:string){
-  const bytes=await object.arrayBuffer();
+async function convertBytesWithWorkersAi(ai:any,bytes:ArrayBuffer,filename:string,contentType:string){
   const converted=await ai.toMarkdown({
     name:filename||'styrdokument',
     blob:new Blob([bytes],{type:contentType||'application/octet-stream'})
   },{
     conversionOptions:{
       output:{format:'markdown'},
-      pdf:{metadata:false}
+      pdf:{metadata:false},
+      image:{descriptionLanguage:'sv'}
     }
   }) as any;
   const result=Array.isArray(converted)?converted[0]:converted;
@@ -169,6 +172,90 @@ async function convertDocumentWithWorkersAi(ai:any,object:R2ObjectBody,filename:
   const data=clean(result?.data);
   if(!data)throw new Error('Dokumentkonverteringen returnerade ingen text.');
   return {text:data,tokens:Number(result?.tokens||0)};
+}
+
+function markdownQuality(text:string,sourceBytes:number){
+  const chars=text.length;
+  const pageMatches=[...text.matchAll(/^### Page\s+\d+/gmi)];
+  const pages=Math.max(1,pageMatches.length);
+  const charsPerPage=chars/pages;
+  const ratio=sourceBytes>0?chars/sourceBytes:1;
+  const reasons:string[]=[];
+  if(chars<600)reasons.push('mindre än 600 tecken');
+  if(pages>=2&&charsPerPage<550)reasons.push(`bara ${Math.round(charsPerPage)} tecken per sida`);
+  if(sourceBytes>=100000&&ratio<0.008)reasons.push('mycket låg textmängd i förhållande till filstorleken');
+  return {poor:reasons.length>0,reason:reasons.join(', ')||'tillräcklig textmängd',chars,pages,charsPerPage,ratio};
+}
+
+function bytesToBase64(bytes:ArrayBuffer){
+  const input=new Uint8Array(bytes);let binary='';const chunkSize=0x8000;
+  for(let i=0;i<input.length;i+=chunkSize){binary+=String.fromCharCode(...input.subarray(i,Math.min(i+chunkSize,input.length)))}
+  return btoa(binary);
+}
+
+async function renderPdfPagesWithBrowser(browserBinding:any,pdfBytes:ArrayBuffer,maxPages=20){
+  if(!browserBinding)throw new Error('Browser Run-binding saknas för PDF-bildfallback.');
+  if(pdfBytes.byteLength>12*1024*1024)throw new Error('PDF-filen är för stor för bildfallbacken (max 12 MB i denna väg).');
+  const browser=await puppeteer.launch(browserBinding);
+  try{
+    const page=await browser.newPage();
+    await page.setViewport({width:1700,height:2300,deviceScaleFactor:1});
+    await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:#fff}.pdf-page{display:block;margin:0 auto 24px auto;background:#fff}</style><script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script></head><body><main id="pages"></main></body></html>`,{waitUntil:'networkidle0'});
+    await page.waitForFunction(()=>Boolean((globalThis as any).pdfjsLib),{timeout:20000});
+    const base64=bytesToBase64(pdfBytes);
+    const totalPages=await page.evaluate(async({base64,maxPages}:{base64:string;maxPages:number})=>{
+      const pdfjs=(globalThis as any).pdfjsLib;
+      pdfjs.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      const raw=atob(base64);const bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);
+      const pdf=await pdfjs.getDocument({data:bytes}).promise;
+      const count=Math.min(Number(pdf.numPages||0),maxPages);
+      const host=document.getElementById('pages')!;
+      for(let n=1;n<=count;n++){
+        const p=await pdf.getPage(n);const viewport=p.getViewport({scale:2});
+        const canvas=document.createElement('canvas');canvas.className='pdf-page';canvas.dataset.page=String(n);canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
+        const ctx=canvas.getContext('2d',{alpha:false})!;ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);
+        await p.render({canvasContext:ctx,viewport}).promise;host.appendChild(canvas);
+      }
+      return count;
+    },{base64,maxPages});
+    if(!totalPages)throw new Error('Browser Run kunde inte rendera några PDF-sidor.');
+    const images:ArrayBuffer[]=[];
+    for(let n=1;n<=totalPages;n++){
+      const handle=await page.$(`canvas[data-page="${n}"]`);
+      if(!handle)continue;
+      const shot=await handle.screenshot({type:'png'}) as Uint8Array;
+      images.push(shot.buffer.slice(shot.byteOffset,shot.byteOffset+shot.byteLength));
+    }
+    if(!images.length)throw new Error('Browser Run renderade PDF:en men inga sidbilder kunde hämtas.');
+    return images;
+  }finally{
+    await browser.close().catch(()=>undefined);
+  }
+}
+
+async function visionPdfFallback(ai:any,browserBinding:any,pdfBytes:ArrayBuffer){
+  const images=await renderPdfPagesWithBrowser(browserBinding,pdfBytes,20);
+  const pages:string[]=[];let tokens=0;
+  for(let i=0;i<images.length;i++){
+    const converted=await ai.toMarkdown({name:`page-${i+1}.png`,blob:new Blob([images[i]],{type:'image/png'})},{conversionOptions:{output:{format:'markdown'},image:{descriptionLanguage:'sv'}}}) as any;
+    const result=Array.isArray(converted)?converted[0]:converted;
+    if(!result||result.format==='error')throw new Error(clean(result?.error)||`Bildtolkning av sida ${i+1} misslyckades.`);
+    const text=clean(result?.data);
+    if(text)pages.push(`### Page ${i+1}\n${text}`);
+    tokens+=Number(result?.tokens||0);
+  }
+  if(!pages.length)throw new Error('Bildfallbacken returnerade ingen läsbar text.');
+  return {text:pages.join('\n\n'),tokens,renderedPages:images.length};
+}
+
+async function convertDocumentForWorkersAi(ai:any,browserBinding:any,object:R2ObjectBody,filename:string,contentType:string):Promise<ConversionResult>{
+  const bytes=await object.arrayBuffer();
+  const primary=await convertBytesWithWorkersAi(ai,bytes,filename,contentType);
+  if(contentType!=='application/pdf')return {text:primary.text,tokens:primary.tokens,mode:'markdown',renderedPages:0,qualityReason:'inte PDF'};
+  const quality=markdownQuality(primary.text,bytes.byteLength);
+  if(!quality.poor)return {text:primary.text,tokens:primary.tokens,mode:'markdown',renderedPages:0,qualityReason:quality.reason};
+  const vision=await visionPdfFallback(ai,browserBinding,bytes);
+  return {text:vision.text,tokens:primary.tokens+vision.tokens,mode:'pdf-vision',renderedPages:vision.renderedPages,qualityReason:quality.reason};
 }
 
 function workersAiResponsePayload(response:any){
@@ -255,11 +342,17 @@ export function registerGoverningDocumentAiAnalysisRoutes(app:RouteApp){
       const contentType=clean(document.content_type)||clean(document.source_mime_type)||'application/octet-stream';
       let analysis:AiAnalysis;
       let conversionTokens=0;
+      let conversionMode='openai-file';
+      let renderedPages=0;
+      let conversionQuality='';
 
       if(provider==='workers-ai'){
         stage='document_conversion';
-        const converted=await convertDocumentWithWorkersAi(c.env.AI,object,filename,contentType);
+        const converted=await convertDocumentForWorkersAi(c.env.AI,c.env.BROWSER,object,filename,contentType);
         conversionTokens=converted.tokens;
+        conversionMode=converted.mode;
+        renderedPages=converted.renderedPages;
+        conversionQuality=converted.qualityReason;
         stage='workers_ai_analysis';
         analysis=await analyzeWithWorkersAi(c.env.AI,workersModel,converted.text,document);
       }else{
@@ -286,7 +379,7 @@ export function registerGoverningDocumentAiAnalysisRoutes(app:RouteApp){
       await c.env.DB.prepare("UPDATE governing_documents SET status='active',updated_at=datetime('now') WHERE id=?").bind(id).run();
       await c.env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count)
         VALUES(?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,provider==='workers-ai'?'workers-ai-generic-v1':'openai-generic-v1',model,'completed',analysis.documentSummary,created).run();
-      return c.json({ok:true,id,createdItems:created,provider,analyzer:provider==='workers-ai'?'workers-ai-generic-v1':'openai-generic-v1',model,documentSummary:analysis.documentSummary,conversionTokens});
+      return c.json({ok:true,id,createdItems:created,provider,analyzer:provider==='workers-ai'?'workers-ai-generic-v1':'openai-generic-v1',model,documentSummary:analysis.documentSummary,conversionTokens,conversionMode,renderedPages,conversionQuality});
     }catch(error){
       console.error('Generic governing document analysis failed',{provider,stage,error});
       const detail=error instanceof Error?error.message:String(error);
