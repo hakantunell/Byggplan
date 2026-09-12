@@ -16,6 +16,9 @@
       "bucket_name": "byggplan-files"
     }
   ],
+  "ai": {
+    "binding": "AI"
+  },
   "vars": {
     "ALLOWED_ORIGIN": "https://byggplan.tunell.org",
     "DEV_USER_EMAIL": "hakan@byggplan.local",
