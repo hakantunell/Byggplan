@@ -17,7 +17,7 @@ type AiItem={
 };
 
 type AiAnalysis={documentSummary:string;items:AiItem[]};
-type AnalysisStage='load_file'|'upload_file'|'openai_analysis'|'save_result'|'cleanup';
+type AiProvider='workers-ai'|'openai';
 
 function clean(value:unknown){return typeof value==='string'?value.trim():''}
 function clampConfidence(value:unknown){const n=Number(value);if(!Number.isFinite(n))return 0;return Math.max(0,Math.min(1,n))}
@@ -153,6 +153,51 @@ async function analyzeWithOpenAI(apiKey:string,model:string,fileId:string,isImag
   return {documentSummary:clean(parsed?.documentSummary),items:Array.isArray(parsed?.items)?parsed.items:[]};
 }
 
+async function convertDocumentWithWorkersAi(ai:any,object:R2ObjectBody,filename:string,contentType:string){
+  const bytes=await object.arrayBuffer();
+  const converted=await ai.toMarkdown({
+    name:filename||'styrdokument',
+    blob:new Blob([bytes],{type:contentType||'application/octet-stream'})
+  },{
+    conversionOptions:{
+      output:{format:'markdown'},
+      pdf:{metadata:false}
+    }
+  }) as any;
+  const result=Array.isArray(converted)?converted[0]:converted;
+  if(!result||result.format==='error')throw new Error(clean(result?.error)||'Cloudflare kunde inte konvertera dokumentet till text.');
+  const data=clean(result?.data);
+  if(!data)throw new Error('Dokumentkonverteringen returnerade ingen text.');
+  return {text:data,tokens:Number(result?.tokens||0)};
+}
+
+function workersAiResponsePayload(response:any){
+  if(response&&typeof response.response==='object'&&response.response!==null)return response.response;
+  if(typeof response?.response==='string'&&response.response.trim()){
+    try{return JSON.parse(response.response)}catch{}
+  }
+  const choice=response?.choices?.[0]?.message?.content;
+  if(typeof choice==='string'&&choice.trim()){
+    try{return JSON.parse(choice)}catch{}
+  }
+  return null;
+}
+
+async function analyzeWithWorkersAi(ai:any,model:string,documentText:string,document:any):Promise<AiAnalysis>{
+  const response=await ai.run(model,{
+    messages:[
+      {role:'system',content:'Du är en noggrann dokumentanalytiker för svenska byggprojekt. Följ extraktionsreglerna exakt. Returnera endast data som följer JSON-schemat.'},
+      {role:'user',content:`${analysisPrompt(document)}\n\n--- DOKUMENTETS INNEHÅLL ---\n${documentText}`}
+    ],
+    response_format:{type:'json_schema',json_schema:jsonSchema()},
+    max_completion_tokens:16000,
+    temperature:0.1
+  }) as any;
+  const parsed=workersAiResponsePayload(response);
+  if(!parsed)throw new Error('Workers AI returnerade inget giltigt strukturerat JSON-resultat.');
+  return {documentSummary:clean(parsed?.documentSummary),items:Array.isArray(parsed?.items)?parsed.items:[]};
+}
+
 function normalizedItems(items:AiItem[]){
   const result:AiItem[]=[];const seen=new Set<string>();
   for(const raw of items){
@@ -178,13 +223,18 @@ function sourceNote(item:AiItem){
   return parts.join(' · ');
 }
 
+function configuredProvider(env:any):AiProvider{
+  return clean(env.AI_PROVIDER).toLowerCase()==='openai'?'openai':'workers-ai';
+}
+
 export function registerGoverningDocumentAiAnalysisRoutes(app:RouteApp){
   app.post('/api/studio/governing-documents/:id/analyze-generic',async c=>{
     await ensureAiSchema(c.env.DB);
     const id=c.req.param('id');
-    const apiKey=clean(c.env.OPEN_API_KEY);
-    if(!apiKey)return c.json({ok:false,error:'Generell dokumentanalys är inte konfigurerad ännu. OPEN_API_KEY saknas i backend.'},503);
-    const model=clean(c.env.OPENAI_MODEL)||'gpt-5.4-mini';
+    const provider=configuredProvider(c.env);
+    const workersModel=clean(c.env.WORKERS_AI_MODEL)||'@cf/zai-org/glm-4.7-flash';
+    const openAiModel=clean(c.env.OPENAI_MODEL)||'gpt-5.4-mini';
+    const model=provider==='workers-ai'?workersModel:openAiModel;
     const document=await c.env.DB.prepare(`SELECT d.id,d.project_id,d.document_type,d.title,d.issuer,d.reference,d.source_filename,d.source_mime_type,
       f.object_key,f.original_name,f.content_type,f.size_bytes
       FROM governing_documents d JOIN governing_document_files f ON f.document_id=d.id WHERE d.id=?`).bind(id).first<any>();
@@ -192,24 +242,35 @@ export function registerGoverningDocumentAiAnalysisRoutes(app:RouteApp){
     const existing=await c.env.DB.prepare('SELECT COUNT(*) AS count FROM governing_items WHERE governing_document_id=?').bind(id).first<{count:number}>();
     if(Number(existing?.count||0)>0)return c.json({ok:false,error:'Dokumentet är redan analyserat. Analysera om dokumentet om du vill ersätta befintliga poster.',existingItems:Number(existing?.count||0)},409);
     if(!c.env.FILES||typeof c.env.FILES.get!=='function')return c.json({ok:false,error:'Fillagringen är inte tillgänglig.'},503);
+    if(provider==='workers-ai'&&(!c.env.AI||typeof c.env.AI.run!=='function'))return c.json({ok:false,error:'Workers AI är inte konfigurerat. AI-binding saknas i backend.'},503);
+    const apiKey=provider==='openai'?clean(c.env.OPEN_API_KEY):'';
+    if(provider==='openai'&&!apiKey)return c.json({ok:false,error:'OpenAI är vald som AI-provider men OPEN_API_KEY saknas i backend.'},503);
 
-    let stage:AnalysisStage='load_file';
+    let stage='load_file';
+    const object=await c.env.FILES.get(String(document.object_key));
+    if(!object)return c.json({ok:false,error:'Originalfilen saknas i fillagringen.'},404);
     let openAiFileId='';
     try{
-      const object=await c.env.FILES.get(String(document.object_key));
-      if(!object)return c.json({ok:false,stage,error:'Originalfilen saknas i fillagringen.'},404);
-
       const filename=clean(document.original_name)||clean(document.source_filename)||'styrdokument';
       const contentType=clean(document.content_type)||clean(document.source_mime_type)||'application/octet-stream';
+      let analysis:AiAnalysis;
+      let conversionTokens=0;
 
-      stage='upload_file';
-      openAiFileId=await uploadToOpenAI(apiKey,object,filename,contentType);
-
-      stage='openai_analysis';
-      const analysis=await analyzeWithOpenAI(apiKey,model,openAiFileId,contentType.startsWith('image/'),document);
-      const items=normalizedItems(analysis.items);
+      if(provider==='workers-ai'){
+        stage='document_conversion';
+        const converted=await convertDocumentWithWorkersAi(c.env.AI,object,filename,contentType);
+        conversionTokens=converted.tokens;
+        stage='workers_ai_analysis';
+        analysis=await analyzeWithWorkersAi(c.env.AI,workersModel,converted.text,document);
+      }else{
+        stage='upload_file';
+        openAiFileId=await uploadToOpenAI(apiKey,object,filename,contentType);
+        stage='openai_analysis';
+        analysis=await analyzeWithOpenAI(apiKey,openAiModel,openAiFileId,contentType.startsWith('image/'),document);
+      }
 
       stage='save_result';
+      const items=normalizedItems(analysis.items);
       let created=0;
       for(let index=0;index<items.length;index+=1){
         const item=items[index];
@@ -224,18 +285,15 @@ export function registerGoverningDocumentAiAnalysisRoutes(app:RouteApp){
       }
       await c.env.DB.prepare("UPDATE governing_documents SET status='active',updated_at=datetime('now') WHERE id=?").bind(id).run();
       await c.env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count)
-        VALUES(?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,'generic-ai-v1',model,'completed',analysis.documentSummary,created).run();
-      return c.json({ok:true,id,createdItems:created,analyzer:'generic-ai-v1',model,documentSummary:analysis.documentSummary});
+        VALUES(?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,provider==='workers-ai'?'workers-ai-generic-v1':'openai-generic-v1',model,'completed',analysis.documentSummary,created).run();
+      return c.json({ok:true,id,createdItems:created,provider,analyzer:provider==='workers-ai'?'workers-ai-generic-v1':'openai-generic-v1',model,documentSummary:analysis.documentSummary,conversionTokens});
     }catch(error){
-      console.error('Generic governing document analysis failed',{stage,error});
+      console.error('Generic governing document analysis failed',{provider,stage,error});
       const detail=error instanceof Error?error.message:String(error);
-      try{await c.env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,?,?,'',0)`).bind(crypto.randomUUID(),id,'generic-ai-v1',model,'failed').run()}catch{}
-      return c.json({ok:false,stage,error:`Kunde inte analysera dokumentet: ${detail}`},500);
+      try{await c.env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,?,?,'',0)`).bind(crypto.randomUUID(),id,provider==='workers-ai'?'workers-ai-generic-v1':'openai-generic-v1',model,'failed').run()}catch{}
+      return c.json({ok:false,provider,stage,error:`Kunde inte analysera dokumentet: ${detail}`},500);
     }finally{
-      if(openAiFileId){
-        stage='cleanup';
-        await deleteOpenAIFile(apiKey,openAiFileId);
-      }
+      if(openAiFileId&&apiKey)await deleteOpenAIFile(apiKey,openAiFileId);
     }
   });
 }
