@@ -312,7 +312,9 @@ export async function analyzeControlPlanDeterministically(env:Env,documentId:str
   }
 
   const seen=new Set<string>();const items=all.filter(item=>{
-    const key=`${item.code}|${item.description.toLocaleLowerCase('sv-SE')}|${item.sourcePage}`;
+    const key=item.itemType==='control'
+      ? `control|${item.code}|${item.sourcePage}`
+      : `documentation|${collapse(item.sourceQuote).toLocaleLowerCase('sv-SE')}|${item.sourcePage}`;
     if(seen.has(key))return false;seen.add(key);return true;
   });
   if(!items.length)throw new Error('Ingen styrande kontrollpunkt kunde verifieras direkt mot dokumentets källtext.');
@@ -331,11 +333,11 @@ export async function analyzeControlPlanDeterministically(env:Env,documentId:str
   const controlCount=items.filter(x=>x.itemType==='control').length;const documentationCount=items.filter(x=>x.itemType==='documentation').length;
   const summary=`Kontrollplan: ${controlCount} verifierade kontrollpunkter och ${documentationCount} verifierade dokumentationspunkter extraherade direkt ur källtext.`;
   await env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,?,'completed',?,?)`).bind(
-    crypto.randomUUID(),documentId,'control-plan-source-text-v6',CONTROL_PLAN_TEXT_MODEL,summary,items.length
+    crypto.randomUUID(),documentId,'control-plan-source-text-v7',CONTROL_PLAN_TEXT_MODEL,summary,items.length
   ).run();
   return {
-    ok:true,id:documentId,createdItems:items.length,provider:'workers-ai',analyzer:'control-plan-source-text-v6',model:CONTROL_PLAN_TEXT_MODEL,
-    documentSummary:summary,conversionMode:'pdf-source-text-verified-codes',renderedPages:pages.length,ocrPages,pageResults,
-    conversionQuality:'Kontrollposter accepteras endast med verifierad kontrollkod i källtexten. PDF-textlagret används först; OCR kompletterar endast sidor med gles text eller misstänkta kodluckor. Dokumentationsposter kräver ordagrant verifierbar källtext.'
+    ok:true,id:documentId,createdItems:items.length,provider:'workers-ai',analyzer:'control-plan-source-text-v7',model:CONTROL_PLAN_TEXT_MODEL,
+    documentSummary:summary,conversionMode:'pdf-source-text-verified-codes-and-documentation',renderedPages:pages.length,ocrPages,pageResults,
+    conversionQuality:'Kontrollposter dedupliceras på verifierad kod och sida. Dokumentationsposter dedupliceras separat på ordagrant verifierad källtext och sida, så olika handlingar på samma sida bevaras.'
   };
 }
