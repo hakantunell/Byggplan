@@ -16,7 +16,7 @@ type ControlItem={
   timing:string;
 };
 
-type SourcePage={page:number;text:string;source:'pdf-text-layer'|'moondream-ocr'};
+type SourcePage={page:number;text:string;source:'pdf-text-layer'|'moondream-ocr'|'pdf-text+ocr'};
 
 const CONTROL_PLAN_TEXT_MODEL='@cf/meta/llama-3.1-8b-instruct-fast';
 const CONTROL_PLAN_OCR_MODEL='@cf/moondream/moondream3.1-9B-A2B';
@@ -154,8 +154,40 @@ async function ocrImage(ai:any,image:ArrayBuffer,page:number):Promise<SourcePage
 
 function detectedRowCodes(text:string){
   const found=new Set<string>();
-  for(const match of text.matchAll(/(?:^|[\s\t])((?:\d{1,2}|[A-Z])\.\d{1,2})(?=[\s\t]|$)/gm))found.add(match[1]);
+  const normalized=text.replace(/(\d{1,2})\s*\.\s*(\d{1,2})/g,'$1.$2');
+  for(const match of normalized.matchAll(/(?:^|[\s\t])((?:\d{1,2}|[A-Z])\.\d{1,2})(?=[\s\t]|$|[^0-9A-Za-z])/gm))found.add(match[1]);
   return [...found];
+}
+
+function pageLooksLikeControlTable(text:string){
+  const t=text.toLocaleLowerCase('sv-SE');
+  return /(moment\s*\/\s*kontrollpunkt|moment.*kontrollpunkt|kontrolleras av|hur kontrollen sker|mot vad kontrolleras)/i.test(t);
+}
+
+function suspiciousCodeGaps(codes:string[]){
+  const numeric=codes.map(code=>{const m=code.match(/^(\d{1,2})\.(\d{1,2})$/);return m?{section:Number(m[1]),row:Number(m[2])}:null}).filter(Boolean) as {section:number;row:number}[];
+  const bySection=new Map<number,number[]>();
+  for(const entry of numeric){const rows=bySection.get(entry.section)||[];rows.push(entry.row);bySection.set(entry.section,rows)}
+  for(const rows of bySection.values()){
+    const unique=[...new Set(rows)].sort((a,b)=>a-b);
+    if(unique.length&&unique[0]>1)return true;
+    for(let i=1;i<unique.length;i++)if(unique[i]-unique[i-1]>1)return true;
+  }
+  return false;
+}
+
+function shouldOcrPage(page:SourcePage){
+  const compact=collapse(page.text);
+  if(compact.length<120)return true;
+  const codes=detectedRowCodes(page.text);
+  if(pageLooksLikeControlTable(page.text)&&codes.length===0)return true;
+  return suspiciousCodeGaps(codes);
+}
+
+function mergeSourceTexts(pdfText:string,ocrText:string){
+  const a=clean(pdfText),b=clean(ocrText);
+  if(!a)return b;if(!b)return a;
+  return `${a}\n\n--- OCR-KOMPLETTERING ---\n${b}`;
 }
 
 function extractionSchema(){return {
@@ -184,7 +216,7 @@ function exactSourceQuote(pageText:string,item:any){
   if(requested&&normalizedPage.includes(requested))return requested.slice(0,600);
   const lines=pageText.split(/\r?\n/).map(collapse).filter(Boolean);
   const code=clean(item?.code);const description=collapse(clean(item?.description));
-  const byCode=code?lines.find(line=>line.includes(code)):undefined;
+  const byCode=code?lines.find(line=>collapse(line).replace(/(\d{1,2})\s*\.\s*(\d{1,2})/g,'$1.$2').includes(code)):undefined;
   if(byCode)return byCode.slice(0,600);
   const byDescription=description?lines.find(line=>line.includes(description)):undefined;
   return (byDescription||'').slice(0,600);
@@ -192,34 +224,31 @@ function exactSourceQuote(pageText:string,item:any){
 
 async function extractItemsFromSourcePage(ai:any,source:SourcePage):Promise<ControlItem[]>{
   const codes=detectedRowCodes(source.text);
-  const codeInstruction=codes.length
-    ? `Följande möjliga kontrollradskoder finns bokstavligen i källtexten: ${codes.join(', ')}. Kontrollera vilka som verkligen är radkoder och returnera varje verklig kontrollrad exakt en gång.`
-    : 'Det hittades inga säkra numrerade kontrollradskoder. Leta ändå efter uttryckliga kontrollpunkter eller uttryckliga dokumentationskrav.';
-  const prompt=`Du får här DIREKT KÄLLTEXT från en sida i en svensk kontrollplan. Texten är avläst från PDF:ens textlager eller med ren OCR. Det finns inget sammanfattningssteg före dig.
+  const prompt=`Du får DIREKT KÄLLTEXT från sida ${source.page} i en svensk kontrollplan. Texten kommer från PDF-textlager och vid behov kompletterande OCR. Det finns inget sammanfattningssteg.
 
-Din uppgift är att identifiera styrande poster DIREKT i källtexten.
-${codeInstruction}
+Verifierade kontrollradskoder i källtexten: ${codes.length?codes.join(', '):'(inga)'}.
 
 Regler:
-- En verklig kontrollrad ska bli exakt en itemType="control".
-- Ett uttryckligt krav på handling/intyg/dokument/foto som ska lämnas in får bli itemType="documentation".
-- Hoppa inte över kontrollrader.
+- En itemType="control" FÅR ENDAST skapas om dess code finns exakt i listan över verifierade kontrollradskoder ovan.
+- Skapa aldrig en kontrollpunkt utan verifierad kod.
+- Varje verklig verifierad kontrollrad ska bli exakt en control-post.
 - Slå inte ihop flera kontrollrader.
-- Hitta inte på krav eller ord som inte finns i källtexten.
-- description ska i första hand vara texten i Moment/kontrollpunkt, inte en sammanfattning av hela raden.
-- responsibleRole och evidenceRequired ska bara fyllas när de går att läsa i källtexten.
+- description ska vara texten i Moment/kontrollpunkt så nära originalet som möjligt, inte en sammanfattning.
+- responsibleRole och evidenceRequired ska bara fyllas när de uttryckligen kan läsas i källtexten.
 - sourceQuote ska kopieras ordagrant från källtexten, aldrig parafraseras.
-- action får vara en kort praktisk formulering baserad direkt på kontrollpunkten.
+- Ett uttryckligt krav på handling/intyg/dokument/foto får bli itemType="documentation" även utan kontrollkod, men bara om sourceQuote kan verifieras ordagrant i källtexten.
+- Hitta inte på krav, ansvar, metod, tidpunkt eller formuleringar.
+- action får vara en kort praktisk formulering baserad direkt på kontrollpunktens text.
 - timing ska vara tomt om tidpunkt/ordning inte uttryckligen framgår.
 - Returnera ingen dokumentöversikt eller sammanfattning.
 
-KÄLLTEXT SIDA ${source.page}:
+KÄLLTEXT:
 ---
 ${source.text}
 ---`;
   const response=await ai.run(CONTROL_PLAN_TEXT_MODEL,{
     messages:[
-      {role:'system',content:'Extrahera styrposter direkt ur given källtext. Sammanfatta aldrig dokumentet och hitta aldrig på källinnehåll.'},
+      {role:'system',content:'Extrahera endast verifierbara styrposter direkt ur given källtext. Skapa aldrig kontrollpunkter utan verifierad kontrollkod.'},
       {role:'user',content:prompt}
     ],
     response_format:{type:'json_schema',json_schema:extractionSchema()},
@@ -231,14 +260,14 @@ ${source.text}
   const items:ControlItem[]=[];
   for(const item of raw){
     const description=clean(item?.description);if(!description)continue;
+    const itemType=item?.itemType==='documentation'?'documentation':'control';
     const code=clean(item?.code);
-    if(code&&codes.length&&!codes.includes(code))continue;
+    if(itemType==='control'&&(!code||!codes.includes(code)))continue;
     const quote=exactSourceQuote(source.text,item);
-    if(!quote&&code)continue;
+    if(!quote)continue;
     items.push({
-      code,description,sectionCode:clean(item?.sectionCode),sectionTitle:clean(item?.sectionTitle),
-      itemType:item?.itemType==='documentation'?'documentation':'control',responsibleRole:clean(item?.responsibleRole),
-      evidenceRequired:clean(item?.evidenceRequired),sourcePage:source.page,sourceQuote:quote,
+      code:itemType==='control'?code:'',description,sectionCode:clean(item?.sectionCode),sectionTitle:clean(item?.sectionTitle),
+      itemType,responsibleRole:clean(item?.responsibleRole),evidenceRequired:clean(item?.evidenceRequired),sourcePage:source.page,sourceQuote:quote,
       action:clean(item?.action)||description,timing:clean(item?.timing)
     });
   }
@@ -258,24 +287,27 @@ export async function analyzeControlPlanDeterministically(env:Env,documentId:str
   const bytes=await object.arrayBuffer();
 
   let pages=await extractPdfTextPages(env.BROWSER,bytes,20);
-  const sparsePages=pages.filter(page=>collapse(page.text).length<120).map(page=>page.page);
-  if(sparsePages.length){
+  const ocrPages=pages.filter(shouldOcrPage).map(page=>page.page);
+  if(ocrPages.length){
     const images=await renderPdfPages(env.BROWSER,bytes,20);
-    for(const pageNumber of sparsePages){
+    for(const pageNumber of ocrPages){
       const image=images[pageNumber-1];if(!image)continue;
-      pages=pages.map(page=>page.page===pageNumber?page:page);
-      const ocr=await ocrImage(env.AI,image,pageNumber);
-      pages=pages.map(page=>page.page===pageNumber?ocr:page);
+      try{
+        const ocr=await ocrImage(env.AI,image,pageNumber);
+        pages=pages.map(page=>page.page===pageNumber?{page:page.page,text:mergeSourceTexts(page.text,ocr.text),source:'pdf-text+ocr' as const}:page);
+      }catch(error){console.warn('Control-plan OCR supplement failed',{page:pageNumber,error})}
     }
   }
 
   const all:ControlItem[]=[];const pageResults:any[]=[];
   for(const source of pages){
+    const verifiedCodes=detectedRowCodes(source.text);
     const pageItems=await extractItemsFromSourcePage(env.AI,source);
     all.push(...pageItems);
     pageResults.push({
-      page:source.page,source:source.source,sourceCharacters:source.text.length,detectedCodes:detectedRowCodes(source.text),
-      controls:pageItems.filter(x=>x.itemType==='control').length,documentation:pageItems.filter(x=>x.itemType==='documentation').length
+      page:source.page,source:source.source,sourceCharacters:source.text.length,detectedCodes:verifiedCodes,
+      controls:pageItems.filter(x=>x.itemType==='control').length,documentation:pageItems.filter(x=>x.itemType==='documentation').length,
+      ocrSupplemented:source.source==='pdf-text+ocr'
     });
   }
 
@@ -297,13 +329,13 @@ export async function analyzeControlPlanDeterministically(env:Env,documentId:str
   }
   await env.DB.prepare("UPDATE governing_documents SET status='active',updated_at=datetime('now') WHERE id=?").bind(documentId).run();
   const controlCount=items.filter(x=>x.itemType==='control').length;const documentationCount=items.filter(x=>x.itemType==='documentation').length;
-  const summary=`Kontrollplan: ${controlCount} kontrollpunkter och ${documentationCount} dokumentationspunkter extraherade direkt ur källtext.`;
+  const summary=`Kontrollplan: ${controlCount} verifierade kontrollpunkter och ${documentationCount} verifierade dokumentationspunkter extraherade direkt ur källtext.`;
   await env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,?,'completed',?,?)`).bind(
-    crypto.randomUUID(),documentId,'control-plan-source-text-v5',CONTROL_PLAN_TEXT_MODEL,summary,items.length
+    crypto.randomUUID(),documentId,'control-plan-source-text-v6',CONTROL_PLAN_TEXT_MODEL,summary,items.length
   ).run();
   return {
-    ok:true,id:documentId,createdItems:items.length,provider:'workers-ai',analyzer:'control-plan-source-text-v5',model:CONTROL_PLAN_TEXT_MODEL,
-    documentSummary:summary,conversionMode:'pdf-source-text-direct-extraction',renderedPages:pages.length,pageResults,
-    conversionQuality:'PDF-text läses direkt från textlagret. AI identifierar styrposter direkt i källtexten utan mellanliggande sammanfattning. OCR används endast om en sida saknar användbart textlager.'
+    ok:true,id:documentId,createdItems:items.length,provider:'workers-ai',analyzer:'control-plan-source-text-v6',model:CONTROL_PLAN_TEXT_MODEL,
+    documentSummary:summary,conversionMode:'pdf-source-text-verified-codes',renderedPages:pages.length,ocrPages,pageResults,
+    conversionQuality:'Kontrollposter accepteras endast med verifierad kontrollkod i källtexten. PDF-textlagret används först; OCR kompletterar endast sidor med gles text eller misstänkta kodluckor. Dokumentationsposter kräver ordagrant verifierbar källtext.'
   };
 }
