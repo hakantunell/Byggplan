@@ -75,10 +75,12 @@ async function processMessage(message:any,env:Env,ctx:ExecutionContext){
   const jobId=String(body?.jobId||''),documentId=String(body?.documentId||'');
   if(!jobId||!documentId){message.ack?.();return}
   await env.DB.prepare("UPDATE governing_document_analysis_jobs SET status='processing',stage='analysis',updated_at=datetime('now') WHERE id=?").bind(jobId).run();
+  let isControlPlan=false;
   try{
     const document=await env.DB.prepare('SELECT document_type FROM governing_documents WHERE id=?').bind(documentId).first<any>();
+    isControlPlan=String(document?.document_type||'')==='control_plan';
     let payload:any;
-    if(String(document?.document_type||'')==='control_plan'){
+    if(isControlPlan){
       await env.DB.prepare("UPDATE governing_document_analysis_jobs SET stage='control_plan_table_extraction',updated_at=datetime('now') WHERE id=?").bind(jobId).run();
       payload=await analyzeControlPlanDeterministically(env as any,documentId);
     }else{
@@ -96,7 +98,8 @@ async function processMessage(message:any,env:Env,ctx:ExecutionContext){
     message.ack?.();
   }catch(error){
     const detail=error instanceof Error?error.message:String(error);
-    await env.DB.prepare("UPDATE governing_document_analysis_jobs SET status='failed',stage='queue_consumer',error_text=?,updated_at=datetime('now') WHERE id=?").bind(detail,jobId).run();
+    await env.DB.prepare("UPDATE governing_document_analysis_jobs SET status='failed',stage=?,error_text=?,updated_at=datetime('now') WHERE id=?").bind(isControlPlan?'control_plan_table_extraction':'queue_consumer',detail,jobId).run();
+    if(isControlPlan){message.ack?.();return}
     if(Number(message.attempts||1)<3)message.retry?.({delaySeconds:10});else message.ack?.();
   }
 }
