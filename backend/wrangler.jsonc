@@ -19,6 +19,9 @@
   "ai": {
     "binding": "AI"
   },
+  "browser": {
+    "binding": "BROWSER"
+  },
   "vars": {
     "ALLOWED_ORIGIN": "https://byggplan.tunell.org",
     "DEV_USER_EMAIL": "hakan@byggplan.local",
