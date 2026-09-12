@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "byggplan-api",
-  "main": "src/auth-entry.ts",
+  "main": "src/async-analysis-entry.ts",
   "compatibility_date": "2026-08-05",
   "d1_databases": [
     {
@@ -21,6 +21,24 @@
   },
   "browser": {
     "binding": "BROWSER"
+  },
+  "queues": {
+    "producers": [
+      {
+        "binding": "ANALYSIS_QUEUE",
+        "queue": "governing-document-analysis"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "governing-document-analysis",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 2,
+        "max_concurrency": 1,
+        "retry_delay": 10
+      }
+    ]
   },
   "vars": {
     "ALLOWED_ORIGIN": "https://byggplan.tunell.org",
