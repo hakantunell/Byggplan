@@ -181,8 +181,8 @@ export function registerGoverningDocumentAiAnalysisRoutes(app:RouteApp){
   app.post('/api/studio/governing-documents/:id/analyze-generic',async c=>{
     await ensureAiSchema(c.env.DB);
     const id=c.req.param('id');
-    const apiKey=clean(c.env.OPENAI_API_KEY);
-    if(!apiKey)return c.json({ok:false,error:'Generell dokumentanalys är inte konfigurerad ännu. OPENAI_API_KEY saknas i backend.'},503);
+    const apiKey=clean(c.env.OPEN_API_KEY);
+    if(!apiKey)return c.json({ok:false,error:'Generell dokumentanalys är inte konfigurerad ännu. OPEN_API_KEY saknas i backend.'},503);
     const model=clean(c.env.OPENAI_MODEL)||'gpt-5.4-mini';
     const document=await c.env.DB.prepare(`SELECT d.id,d.project_id,d.document_type,d.title,d.issuer,d.reference,d.source_filename,d.source_mime_type,
       f.object_key,f.original_name,f.content_type,f.size_bytes
