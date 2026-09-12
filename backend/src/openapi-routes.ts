@@ -2,6 +2,7 @@ type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void};
 
 const projectId={name:'projectId',in:'path',required:true,schema:{type:'string'},description:'Projektets UUID'};
 const activityId={name:'activityId',in:'path',required:true,schema:{type:'string'},description:'Aktivitetens UUID'};
+const documentId={name:'id',in:'path',required:true,schema:{type:'string'},description:'Styrdokumentets UUID'};
 const jsonBody=(description:string,example:any)=>({required:true,content:{'application/json':{schema:{type:'object'},example,description}}});
 const ok={description:'OK',content:{'application/json':{schema:{type:'object'}}}};
 
@@ -10,7 +11,7 @@ export function registerOpenApiRoutes(app:RouteApp){
     openapi:'3.1.0',
     info:{
       title:'ByggPlan API',
-      version:'2026-08-13',
+      version:'2026-09-12',
       description:'Intern OpenAPI-specifikation för ByggPlan Studio. API Browser i Studio använder samma-origin-transporten, vilket gör att anrop fungerar även på nätverk som blockerar synliga URL-sökvägar.'
     },
     servers:[{url:'/',description:'ByggPlan Studio same-origin transport'}],
@@ -41,6 +42,12 @@ export function registerOpenApiRoutes(app:RouteApp){
       '/api/studio/projects/{projectId}/context':{
         get:{tags:['Projekt'],summary:'Läs projektkontext',parameters:[projectId],responses:{'200':ok}},
         put:{tags:['Projekt'],summary:'Ändra projektkontext',parameters:[projectId],requestBody:jsonBody('Projektkontext',{deliveryMode:'self_build'}),responses:{'200':ok}}
+      },
+      '/api/studio/projects/{projectId}/governing-documents':{
+        get:{tags:['Styrdokument'],summary:'Lista styrdokument i projekt',description:'Visar projektets styrdokument och deras dokument-ID. Använd dokument-ID:t för att läsa samtliga analyserade poster i ett dokument.',parameters:[projectId],responses:{'200':ok}}
+      },
+      '/api/studio/governing-documents/{id}':{
+        get:{tags:['Styrdokument'],summary:'Läs styrdokument med alla poster',description:'Returnerar styrdokumentets metadata och alla analyserade styrposter i sorteringsordning, inklusive antal kopplade aktiviteter.',parameters:[documentId],responses:{'200':ok}}
       },
       '/api/studio/projects/{projectId}/governing-mapping':{
         get:{tags:['Styrdokument'],summary:'Läs kartläggning mot styrdokument',parameters:[projectId],responses:{'200':ok}}
