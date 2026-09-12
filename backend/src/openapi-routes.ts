@@ -53,7 +53,10 @@ export function registerOpenApiRoutes(app:RouteApp){
         delete:{tags:['Styrdokument'],summary:'Nollställ styrdokumentanalys',description:'Tar bort dokumentets befintliga styrposter och deras aktivitetskopplingar så att analysen kan köras om. Originalfilen och själva styrdokumentet behålls.',parameters:[documentId],responses:{'200':ok,'404':ok}}
       },
       '/api/studio/governing-documents/{id}/analyze-generic':{
-        post:{tags:['Styrdokument'],summary:'Kör generell AI-analys av styrdokument',description:'Kör den generella AI-analysen direkt mot originalfilen utan fallback. Används bland annat för diagnostik av modell-, API- eller konfigurationsfel.',parameters:[documentId],responses:{'200':ok,'400':ok,'404':ok,'409':ok,'500':ok,'503':ok}}
+        post:{tags:['Styrdokument'],summary:'Starta generell AI-analys av styrdokument',description:'Köar den generella AI-analysen och returnerar direkt ett analysisRunId. Själva analysen körs asynkront.',parameters:[documentId],responses:{'202':ok,'400':ok,'404':ok,'409':ok,'500':ok,'503':ok}}
+      },
+      '/api/studio/governing-documents/{id}/analysis-status':{
+        get:{tags:['Diagnostik','Styrdokument'],summary:'Läs status för senaste AI-analysen',description:'Visar status för den senaste asynkrona dokumentanalysen: not_started, queued, processing, completed eller failed. Vid completed finns analysresultatet i result.',parameters:[documentId],responses:{'200':ok,'403':ok,'404':ok}}
       },
       '/api/studio/governing-documents/{id}/conversion-diagnostics':{
         post:{tags:['Diagnostik','Styrdokument'],summary:'Diagnostisera dokumentkonvertering',description:'Konverterar originalfilen med Workers AI toMarkdown utan att köra AI-analysen eller ändra styrposter. Returnerar tokenantal, tecken/linjer och upp till 30 000 tecken av den Markdown som analysmodellen faktiskt får.',parameters:[documentId],responses:{'200':ok,'404':ok,'500':ok,'503':ok}}
