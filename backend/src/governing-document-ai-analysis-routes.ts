@@ -17,6 +17,7 @@ type AiItem={
 };
 
 type AiAnalysis={documentSummary:string;items:AiItem[]};
+type AnalysisStage='load_file'|'upload_file'|'openai_analysis'|'save_result'|'cleanup';
 
 function clean(value:unknown){return typeof value==='string'?value.trim():''}
 function clampConfidence(value:unknown){const n=Number(value);if(!Number.isFinite(n))return 0;return Math.max(0,Math.min(1,n))}
@@ -191,15 +192,24 @@ export function registerGoverningDocumentAiAnalysisRoutes(app:RouteApp){
     const existing=await c.env.DB.prepare('SELECT COUNT(*) AS count FROM governing_items WHERE governing_document_id=?').bind(id).first<{count:number}>();
     if(Number(existing?.count||0)>0)return c.json({ok:false,error:'Dokumentet är redan analyserat. Analysera om dokumentet om du vill ersätta befintliga poster.',existingItems:Number(existing?.count||0)},409);
     if(!c.env.FILES||typeof c.env.FILES.get!=='function')return c.json({ok:false,error:'Fillagringen är inte tillgänglig.'},503);
-    const object=await c.env.FILES.get(String(document.object_key));
-    if(!object)return c.json({ok:false,error:'Originalfilen saknas i fillagringen.'},404);
+
+    let stage:AnalysisStage='load_file';
     let openAiFileId='';
     try{
+      const object=await c.env.FILES.get(String(document.object_key));
+      if(!object)return c.json({ok:false,stage,error:'Originalfilen saknas i fillagringen.'},404);
+
       const filename=clean(document.original_name)||clean(document.source_filename)||'styrdokument';
       const contentType=clean(document.content_type)||clean(document.source_mime_type)||'application/octet-stream';
+
+      stage='upload_file';
       openAiFileId=await uploadToOpenAI(apiKey,object,filename,contentType);
+
+      stage='openai_analysis';
       const analysis=await analyzeWithOpenAI(apiKey,model,openAiFileId,contentType.startsWith('image/'),document);
       const items=normalizedItems(analysis.items);
+
+      stage='save_result';
       let created=0;
       for(let index=0;index<items.length;index+=1){
         const item=items[index];
@@ -217,12 +227,15 @@ export function registerGoverningDocumentAiAnalysisRoutes(app:RouteApp){
         VALUES(?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,'generic-ai-v1',model,'completed',analysis.documentSummary,created).run();
       return c.json({ok:true,id,createdItems:created,analyzer:'generic-ai-v1',model,documentSummary:analysis.documentSummary});
     }catch(error){
-      console.error('Generic governing document analysis failed',error);
+      console.error('Generic governing document analysis failed',{stage,error});
       const detail=error instanceof Error?error.message:String(error);
       try{await c.env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,?,?,'',0)`).bind(crypto.randomUUID(),id,'generic-ai-v1',model,'failed').run()}catch{}
-      return c.json({ok:false,error:`Kunde inte analysera dokumentet: ${detail}`},502);
+      return c.json({ok:false,stage,error:`Kunde inte analysera dokumentet: ${detail}`},500);
     }finally{
-      if(openAiFileId)await deleteOpenAIFile(apiKey,openAiFileId);
+      if(openAiFileId){
+        stage='cleanup';
+        await deleteOpenAIFile(apiKey,openAiFileId);
+      }
     }
   });
 }
