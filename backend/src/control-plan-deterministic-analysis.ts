@@ -7,15 +7,7 @@ type ControlItem={
   responsibleRole:string;evidenceRequired:string;sourcePage:number;sourceQuote:string;action:string;timing:string;
 };
 
-type VisionCandidate={
-  text:string;
-  tokens:number;
-  items:ControlItem[];
-  controls:number;
-  documentation:number;
-  looksLikeControlTable:boolean;
-  attempt:number;
-};
+const CONTROL_PLAN_VISION_MODEL='@cf/google/gemma-4-26b-a4b-it';
 
 function clean(value:unknown){return typeof value==='string'?value.trim():''}
 function plain(value:string){
@@ -26,7 +18,7 @@ function primaryLanguage(value:string){
   return text.replace(/\s+\([^()]{2,120}\)\s*$/,'').trim()||text;
 }
 function norm(value:string){
-  return primaryLanguage(value).toLocaleLowerCase('sv-SE').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ' ).trim();
+  return primaryLanguage(value).toLocaleLowerCase('sv-SE').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
 }
 function splitRow(line:string){
   const trimmed=line.trim().replace(/^\|/,'').replace(/\|$/,'');
@@ -87,26 +79,6 @@ export function parseControlPlanMarkdownPage(markdown:string,page:number):Contro
   return result;
 }
 
-function looksLikeControlTable(markdown:string){
-  const text=markdown.toLocaleLowerCase('sv-SE');
-  const semanticHeader=/(kontrollpunkt|kontrolleras av|hur kontrollen|kontrollmetod|moment \/ kontrollpunkt|control point|method of inspection)/i.test(text);
-  const pipeRows=markdown.split(/\r?\n/).filter(line=>line.trim().startsWith('|')).length;
-  return semanticHeader&&pipeRows>=2;
-}
-
-function candidateScore(candidate:VisionCandidate){
-  return candidate.controls*1000+candidate.documentation*100+Math.min(candidate.text.length,9999)/10000;
-}
-
-function betterCandidate(a:VisionCandidate,b:VisionCandidate){
-  return candidateScore(b)>candidateScore(a)?b:a;
-}
-
-function shouldRetryCandidate(candidate:VisionCandidate){
-  if(!candidate.looksLikeControlTable)return false;
-  return candidate.controls<2;
-}
-
 function bytesToBase64(bytes:ArrayBuffer){
   const input=new Uint8Array(bytes);let binary='';const chunkSize=0x8000;
   for(let i=0;i<input.length;i+=chunkSize)binary+=String.fromCharCode(...input.subarray(i,Math.min(i+chunkSize,input.length)));
@@ -137,34 +109,59 @@ async function renderPdfPages(browserBinding:any,pdfBytes:ArrayBuffer,maxPages=2
   }finally{await browser.close().catch(()=>undefined)}
 }
 
-async function imageToMarkdown(ai:any,image:ArrayBuffer,page:number,attempt:number){
-  const converted=await ai.toMarkdown({name:`page-${page}-attempt-${attempt}.png`,blob:new Blob([image],{type:'image/png'})},{conversionOptions:{output:{format:'markdown'},image:{descriptionLanguage:'sv'}}}) as any;
-  const r=Array.isArray(converted)?converted[0]:converted;if(!r||r.format==='error')throw new Error(clean(r?.error)||`Bildtolkning av sida ${page} misslyckades.`);
-  const text=clean(r?.data);if(!text)throw new Error(`Sida ${page} gav ingen text.`);return {text,tokens:Number(r?.tokens||0)};
+function visionOutputText(response:any){
+  if(typeof response?.response==='string'&&response.response.trim())return response.response.trim();
+  if(typeof response?.output_text==='string'&&response.output_text.trim())return response.output_text.trim();
+  const choice=response?.choices?.[0]?.message?.content;
+  if(typeof choice==='string'&&choice.trim())return choice.trim();
+  return '';
 }
 
-async function bestVisionCandidateForPage(ai:any,image:ArrayBuffer,page:number){
-  const maxAttempts=3;
-  const attempts:VisionCandidate[]=[];
-  let consumedTokens=0;
-  for(let attempt=1;attempt<=maxAttempts;attempt++){
-    const converted=await imageToMarkdown(ai,image,page,attempt);
-    consumedTokens+=converted.tokens;
-    const items=parseControlPlanMarkdownPage(converted.text,page);
-    const candidate:VisionCandidate={
-      text:converted.text,
-      tokens:converted.tokens,
-      items,
-      controls:items.filter(item=>item.itemType==='control').length,
-      documentation:items.filter(item=>item.itemType==='documentation').length,
-      looksLikeControlTable:looksLikeControlTable(converted.text),
-      attempt
-    };
-    attempts.push(candidate);
-    if(!shouldRetryCandidate(candidate))break;
+const TRANSCRIPTION_PROMPT=`Du transkriberar en sida ur en svensk kontrollplan för byggprojekt.
+Din uppgift är INTE att sammanfatta, beskriva eller tolka sidan. Återge allt relevant synligt innehåll så troget som möjligt som Markdown.
+
+Regler:
+- Transkribera VARJE tabellrad. Hoppa aldrig över en rad även om den liknar andra rader.
+- Slå aldrig ihop flera kontrollpunkter.
+- Bevara originalspråket. Översätt inte svenska termer till engelska.
+- Bevara nummer/koder exakt, t.ex. 1.1, 1.2, 2.3.
+- Bevara tabellens kolumner och deras ordning som en Markdown-tabell.
+- Bevara rubriker som Markdown-rubriker.
+- Bevara punktlistor, särskilt handlingar, intyg, foton eller dokument som ska lämnas in.
+- Tomma signatur- och anmärkningsfält får utelämnas, men inga kontrollpunkter eller sakuppgifter får utelämnas.
+- Lägg inte till förklaringar, översättningar, kommentarer eller en "Document Overview".
+
+Returnera endast transkriberad Markdown.`;
+
+async function transcribeWithVisionModel(ai:any,image:ArrayBuffer,page:number){
+  const imageData=`data:image/png;base64,${bytesToBase64(image)}`;
+  const response=await ai.run(CONTROL_PLAN_VISION_MODEL,{
+    messages:[
+      {role:'system',content:'Du är en exakt OCR- och dokumenttranskriptionsmotor. Följ instruktionen ordagrant och sammanfatta aldrig.'},
+      {role:'user',content:TRANSCRIPTION_PROMPT}
+    ],
+    image:imageData,
+    temperature:0,
+    max_completion_tokens:7000
+  }) as any;
+  const text=visionOutputText(response);
+  if(!text)throw new Error(`Visionmodellen gav ingen transkription för sida ${page}.`);
+  const tokens=Number(response?.usage?.total_tokens||response?.usage?.output_tokens||0);
+  return {text,tokens,source:'instructed-vision'};
+}
+
+async function fallbackToMarkdown(ai:any,image:ArrayBuffer,page:number){
+  const converted=await ai.toMarkdown({name:`page-${page}.png`,blob:new Blob([image],{type:'image/png'})},{conversionOptions:{output:{format:'markdown'}}}) as any;
+  const r=Array.isArray(converted)?converted[0]:converted;if(!r||r.format==='error')throw new Error(clean(r?.error)||`Bildtolkning av sida ${page} misslyckades.`);
+  const text=clean(r?.data);if(!text)throw new Error(`Sida ${page} gav ingen text.`);return {text,tokens:Number(r?.tokens||0),source:'toMarkdown-fallback'};
+}
+
+async function transcribePage(ai:any,image:ArrayBuffer,page:number){
+  try{return await transcribeWithVisionModel(ai,image,page)}
+  catch(error){
+    console.warn('Instructed control-plan vision transcription failed; using toMarkdown fallback',{page,error});
+    return fallbackToMarkdown(ai,image,page);
   }
-  const best=attempts.reduce((winner,candidate)=>betterCandidate(winner,candidate),attempts[0]);
-  return {best,consumedTokens,attempts:attempts.length};
 }
 
 async function addColumnIfMissing(db:D1Database,sql:string){try{await db.prepare(sql).run()}catch(error){const m=error instanceof Error?error.message:String(error);if(!m.toLowerCase().includes('duplicate column'))throw error}}
@@ -179,7 +176,7 @@ async function ensureSchema(db:D1Database){
 
 export async function analyzeControlPlanDeterministically(env:Env,documentId:string){
   await ensureSchema(env.DB);
-  if(!env.AI||typeof env.AI.toMarkdown!=='function')throw new Error('Workers AI dokumentkonvertering är inte konfigurerad.');
+  if(!env.AI||typeof env.AI.run!=='function')throw new Error('Workers AI är inte konfigurerat.');
   if(!env.FILES||typeof env.FILES.get!=='function')throw new Error('Fillagringen är inte tillgänglig.');
   const document=await env.DB.prepare(`SELECT d.id,d.document_type,d.title,d.source_filename,d.source_mime_type,f.object_key,f.original_name,f.content_type,f.size_bytes FROM governing_documents d JOIN governing_document_files f ON f.document_id=d.id WHERE d.id=?`).bind(documentId).first<any>();
   if(!document)throw new Error('Styrdokumentet eller originalfilen hittades inte.');
@@ -188,15 +185,14 @@ export async function analyzeControlPlanDeterministically(env:Env,documentId:str
   if(Number(existing?.count||0)>0)throw new Error('Dokumentet är redan analyserat.');
   const object=await env.FILES.get(String(document.object_key));if(!object)throw new Error('Originalfilen saknas i fillagringen.');
   const bytes=await object.arrayBuffer();const images=await renderPdfPages(env.BROWSER,bytes,20);
-  const all:ControlItem[]=[];let conversionTokens=0;let visionAttempts=0;const retriedPages:number[]=[];const pageResults:any[]=[];
+  const all:ControlItem[]=[];let conversionTokens=0;const pageResults:any[]=[];
   for(let i=0;i<images.length;i++){
     const page=i+1;
-    const selection=await bestVisionCandidateForPage(env.AI,images[i],page);
-    conversionTokens+=selection.consumedTokens;
-    visionAttempts+=selection.attempts;
-    if(selection.attempts>1)retriedPages.push(page);
-    all.push(...selection.best.items);
-    pageResults.push({page,attempts:selection.attempts,selectedAttempt:selection.best.attempt,controls:selection.best.controls,documentation:selection.best.documentation,characters:selection.best.text.length});
+    const converted=await transcribePage(env.AI,images[i],page);
+    conversionTokens+=converted.tokens;
+    const pageItems=parseControlPlanMarkdownPage(converted.text,page);
+    all.push(...pageItems);
+    pageResults.push({page,source:converted.source,controls:pageItems.filter(x=>x.itemType==='control').length,documentation:pageItems.filter(x=>x.itemType==='documentation').length,characters:converted.text.length});
   }
   const seen=new Set<string>();const items=all.filter(item=>{const key=`${item.code}|${item.description.toLocaleLowerCase('sv-SE')}|${item.sourcePage}`;if(seen.has(key))return false;seen.add(key);return true});
   if(!items.length)throw new Error('Bildtolkningen hittade inga tabellrader som kunde tolkas som kontrollpunkter.');
@@ -204,6 +200,6 @@ export async function analyzeControlPlanDeterministically(env:Env,documentId:str
   await env.DB.prepare("UPDATE governing_documents SET status='active',updated_at=datetime('now') WHERE id=?").bind(documentId).run();
   const controlCount=items.filter(x=>x.itemType==='control').length;const documentationCount=items.filter(x=>x.itemType==='documentation').length;
   const summary=`Kontrollplan: ${controlCount} kontrollpunkter och ${documentationCount} dokumentationspunkter extraherade radvis.`;
-  await env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,'workers-ai-toMarkdown','completed',?,?)`).bind(crypto.randomUUID(),documentId,'control-plan-table-parser-v2',summary,items.length).run();
-  return {ok:true,id:documentId,createdItems:items.length,provider:'workers-ai',analyzer:'control-plan-table-parser-v2',model:'workers-ai-toMarkdown',documentSummary:summary,conversionTokens,conversionMode:'pdf-vision-table-parser-retry',renderedPages:images.length,visionAttempts,retriedPages,pageResults,conversionQuality:'Kontrollplan extraherad deterministiskt; glesa tabellresultat körs om upp till tre gånger och bästa resultat väljs per sida'};
+  await env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,'${CONTROL_PLAN_VISION_MODEL}','completed',?,?)`).bind(crypto.randomUUID(),documentId,'control-plan-table-parser-v3',summary,items.length).run();
+  return {ok:true,id:documentId,createdItems:items.length,provider:'workers-ai',analyzer:'control-plan-table-parser-v3',model:CONTROL_PLAN_VISION_MODEL,documentSummary:summary,conversionTokens,conversionMode:'pdf-instructed-vision-table-parser',renderedPages:images.length,pageResults,conversionQuality:'Varje PDF-sida transkriberas en gång med explicit OCR/tabellinstruktion; toMarkdown används endast som teknisk fallback vid visionsfel'};
 }
