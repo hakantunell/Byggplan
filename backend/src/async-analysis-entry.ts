@@ -2,6 +2,7 @@ import authEntry from './auth-entry';
 import internalApp from './attestation-entry';
 import {authConfigured,sessionUserFromRequest} from './auth-session';
 import {canAccessProject,ensureWorkspaceSchema} from './workspace-access';
+import {analyzeControlPlanDeterministically} from './control-plan-deterministic-analysis';
 
 type Env={
   DB:D1Database;
@@ -75,16 +76,23 @@ async function processMessage(message:any,env:Env,ctx:ExecutionContext){
   if(!jobId||!documentId){message.ack?.();return}
   await env.DB.prepare("UPDATE governing_document_analysis_jobs SET status='processing',stage='analysis',updated_at=datetime('now') WHERE id=?").bind(jobId).run();
   try{
-    const req=new Request(`https://internal/api/studio/governing-documents/${encodeURIComponent(documentId)}/analyze-generic`,{method:'POST',headers:{'x-byggplan-queue-job':jobId}});
-    const response=await internalApp.fetch(req,env as any,ctx);
-    const text=await response.text();
-    let payload:any;try{payload=JSON.parse(text)}catch{payload={ok:false,error:text||`HTTP ${response.status}`}}
-    if(response.ok&&payload?.ok){
-      await env.DB.prepare("UPDATE governing_document_analysis_jobs SET status='completed',stage='completed',result_json=?,error_text='',updated_at=datetime('now') WHERE id=?").bind(JSON.stringify(payload),jobId).run();
+    const document=await env.DB.prepare('SELECT document_type FROM governing_documents WHERE id=?').bind(documentId).first<any>();
+    let payload:any;
+    if(String(document?.document_type||'')==='control_plan'){
+      await env.DB.prepare("UPDATE governing_document_analysis_jobs SET stage='control_plan_table_extraction',updated_at=datetime('now') WHERE id=?").bind(jobId).run();
+      payload=await analyzeControlPlanDeterministically(env as any,documentId);
     }else{
-      const stage=String(payload?.stage||'analysis');const detail=String(payload?.error||`HTTP ${response.status}`);
-      await env.DB.prepare("UPDATE governing_document_analysis_jobs SET status='failed',stage=?,result_json=?,error_text=?,updated_at=datetime('now') WHERE id=?").bind(stage,JSON.stringify(payload),detail,jobId).run();
+      const req=new Request(`https://internal/api/studio/governing-documents/${encodeURIComponent(documentId)}/analyze-generic`,{method:'POST',headers:{'x-byggplan-queue-job':jobId}});
+      const response=await internalApp.fetch(req,env as any,ctx);
+      const text=await response.text();
+      try{payload=JSON.parse(text)}catch{payload={ok:false,error:text||`HTTP ${response.status}`}}
+      if(!response.ok||!payload?.ok){
+        const stage=String(payload?.stage||'analysis');const detail=String(payload?.error||`HTTP ${response.status}`);
+        await env.DB.prepare("UPDATE governing_document_analysis_jobs SET status='failed',stage=?,result_json=?,error_text=?,updated_at=datetime('now') WHERE id=?").bind(stage,JSON.stringify(payload),detail,jobId).run();
+        message.ack?.();return;
+      }
     }
+    await env.DB.prepare("UPDATE governing_document_analysis_jobs SET status='completed',stage='completed',result_json=?,error_text='',updated_at=datetime('now') WHERE id=?").bind(JSON.stringify(payload),jobId).run();
     message.ack?.();
   }catch(error){
     const detail=error instanceof Error?error.message:String(error);
