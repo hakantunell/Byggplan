@@ -7,6 +7,16 @@ type ControlItem={
   responsibleRole:string;evidenceRequired:string;sourcePage:number;sourceQuote:string;action:string;timing:string;
 };
 
+type VisionCandidate={
+  text:string;
+  tokens:number;
+  items:ControlItem[];
+  controls:number;
+  documentation:number;
+  looksLikeControlTable:boolean;
+  attempt:number;
+};
+
 function clean(value:unknown){return typeof value==='string'?value.trim():''}
 function plain(value:string){
   return value.replace(/\*\*/g,'').replace(/<br\s*\/?>/gi,' / ').replace(/\\\|/g,'|').replace(/\s+/g,' ').trim();
@@ -31,7 +41,6 @@ function markdownSectionTitle(lines:string[],index:number){
   }
   return {code:'',title:''};
 }
-function quoteFromRow(cells:string[]){return cells.map(primaryLanguage).filter(Boolean).join(' | ').slice(0,600)}
 
 export function parseControlPlanMarkdownPage(markdown:string,page:number):ControlItem[]{
   const lines=markdown.split(/\r?\n/);const result:ControlItem[]=[];
@@ -57,10 +66,9 @@ export function parseControlPlanMarkdownPage(markdown:string,page:number):Contro
       const evidence=evidenceIx>=0?primaryLanguage(cells[evidenceIx]||''):'';
       const rule=ruleIx>=0?primaryLanguage(cells[ruleIx]||''):'';
       const responsible=responsibleIx>=0?primaryLanguage(cells[responsibleIx]||''):'';
-      const description=point;
       const sourceParts=[code,point,method,evidence,rule,responsible].filter(Boolean);
       result.push({
-        code,description,sectionCode:section.code,sectionTitle:section.title,itemType:'control',responsibleRole:responsible,
+        code,description:point,sectionCode:section.code,sectionTitle:section.title,itemType:'control',responsibleRole:responsible,
         evidenceRequired:evidence,sourcePage:page,sourceQuote:sourceParts.join(' | ').slice(0,600),action:point,timing:''
       });
     }
@@ -77,6 +85,26 @@ export function parseControlPlanMarkdownPage(markdown:string,page:number):Contro
     result.push({code:'',description:text,sectionCode:'',sectionTitle:bulletSection,itemType:'documentation',responsibleRole:'',evidenceRequired:text,sourcePage:page,sourceQuote:text.slice(0,600),action:`Ta fram ${text}`,timing:'Inför slutbesked'});
   }
   return result;
+}
+
+function looksLikeControlTable(markdown:string){
+  const text=markdown.toLocaleLowerCase('sv-SE');
+  const semanticHeader=/(kontrollpunkt|kontrolleras av|hur kontrollen|kontrollmetod|moment \/ kontrollpunkt|control point|method of inspection)/i.test(text);
+  const pipeRows=markdown.split(/\r?\n/).filter(line=>line.trim().startsWith('|')).length;
+  return semanticHeader&&pipeRows>=2;
+}
+
+function candidateScore(candidate:VisionCandidate){
+  return candidate.controls*1000+candidate.documentation*100+Math.min(candidate.text.length,9999)/10000;
+}
+
+function betterCandidate(a:VisionCandidate,b:VisionCandidate){
+  return candidateScore(b)>candidateScore(a)?b:a;
+}
+
+function shouldRetryCandidate(candidate:VisionCandidate){
+  if(!candidate.looksLikeControlTable)return false;
+  return candidate.controls<2;
 }
 
 function bytesToBase64(bytes:ArrayBuffer){
@@ -109,10 +137,34 @@ async function renderPdfPages(browserBinding:any,pdfBytes:ArrayBuffer,maxPages=2
   }finally{await browser.close().catch(()=>undefined)}
 }
 
-async function imageToMarkdown(ai:any,image:ArrayBuffer,page:number){
-  const converted=await ai.toMarkdown({name:`page-${page}.png`,blob:new Blob([image],{type:'image/png'})},{conversionOptions:{output:{format:'markdown'},image:{descriptionLanguage:'sv'}}}) as any;
+async function imageToMarkdown(ai:any,image:ArrayBuffer,page:number,attempt:number){
+  const converted=await ai.toMarkdown({name:`page-${page}-attempt-${attempt}.png`,blob:new Blob([image],{type:'image/png'})},{conversionOptions:{output:{format:'markdown'},image:{descriptionLanguage:'sv'}}}) as any;
   const r=Array.isArray(converted)?converted[0]:converted;if(!r||r.format==='error')throw new Error(clean(r?.error)||`Bildtolkning av sida ${page} misslyckades.`);
   const text=clean(r?.data);if(!text)throw new Error(`Sida ${page} gav ingen text.`);return {text,tokens:Number(r?.tokens||0)};
+}
+
+async function bestVisionCandidateForPage(ai:any,image:ArrayBuffer,page:number){
+  const maxAttempts=3;
+  const attempts:VisionCandidate[]=[];
+  let consumedTokens=0;
+  for(let attempt=1;attempt<=maxAttempts;attempt++){
+    const converted=await imageToMarkdown(ai,image,page,attempt);
+    consumedTokens+=converted.tokens;
+    const items=parseControlPlanMarkdownPage(converted.text,page);
+    const candidate:VisionCandidate={
+      text:converted.text,
+      tokens:converted.tokens,
+      items,
+      controls:items.filter(item=>item.itemType==='control').length,
+      documentation:items.filter(item=>item.itemType==='documentation').length,
+      looksLikeControlTable:looksLikeControlTable(converted.text),
+      attempt
+    };
+    attempts.push(candidate);
+    if(!shouldRetryCandidate(candidate))break;
+  }
+  const best=attempts.reduce((winner,candidate)=>betterCandidate(winner,candidate),attempts[0]);
+  return {best,consumedTokens,attempts:attempts.length};
 }
 
 async function addColumnIfMissing(db:D1Database,sql:string){try{await db.prepare(sql).run()}catch(error){const m=error instanceof Error?error.message:String(error);if(!m.toLowerCase().includes('duplicate column'))throw error}}
@@ -136,13 +188,22 @@ export async function analyzeControlPlanDeterministically(env:Env,documentId:str
   if(Number(existing?.count||0)>0)throw new Error('Dokumentet är redan analyserat.');
   const object=await env.FILES.get(String(document.object_key));if(!object)throw new Error('Originalfilen saknas i fillagringen.');
   const bytes=await object.arrayBuffer();const images=await renderPdfPages(env.BROWSER,bytes,20);
-  const all:ControlItem[]=[];let conversionTokens=0;
-  for(let i=0;i<images.length;i++){const converted=await imageToMarkdown(env.AI,images[i],i+1);conversionTokens+=converted.tokens;all.push(...parseControlPlanMarkdownPage(converted.text,i+1))}
+  const all:ControlItem[]=[];let conversionTokens=0;let visionAttempts=0;const retriedPages:number[]=[];const pageResults:any[]=[];
+  for(let i=0;i<images.length;i++){
+    const page=i+1;
+    const selection=await bestVisionCandidateForPage(env.AI,images[i],page);
+    conversionTokens+=selection.consumedTokens;
+    visionAttempts+=selection.attempts;
+    if(selection.attempts>1)retriedPages.push(page);
+    all.push(...selection.best.items);
+    pageResults.push({page,attempts:selection.attempts,selectedAttempt:selection.best.attempt,controls:selection.best.controls,documentation:selection.best.documentation,characters:selection.best.text.length});
+  }
   const seen=new Set<string>();const items=all.filter(item=>{const key=`${item.code}|${item.description.toLocaleLowerCase('sv-SE')}|${item.sourcePage}`;if(seen.has(key))return false;seen.add(key);return true});
   if(!items.length)throw new Error('Bildtolkningen hittade inga tabellrader som kunde tolkas som kontrollpunkter.');
   for(let i=0;i<items.length;i++){const item=items[i];await env.DB.prepare(`INSERT INTO governing_items(id,governing_document_id,code,description,section_code,section_title,item_type,responsible_role,evidence_required,handling_status,handling_comment,sort_order,source_note,source_page,source_quote,confidence,action_text,timing_text) VALUES(?,?,?,?,?,?,?,?,?,'unhandled','',?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),documentId,item.code,item.description,item.sectionCode,item.sectionTitle,item.itemType,item.responsibleRole,item.evidenceRequired,(i+1)*10,`Sida ${item.sourcePage} · ${item.sourceQuote}`,item.sourcePage,item.sourceQuote,0.99,item.action,item.timing).run()}
   await env.DB.prepare("UPDATE governing_documents SET status='active',updated_at=datetime('now') WHERE id=?").bind(documentId).run();
-  const summary=`Kontrollplan: ${items.filter(x=>x.itemType==='control').length} kontrollpunkter och ${items.filter(x=>x.itemType==='documentation').length} dokumentationspunkter extraherade radvis.`;
-  await env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,'workers-ai-toMarkdown','completed',?,?)`).bind(crypto.randomUUID(),documentId,'control-plan-table-parser-v1',summary,items.length).run();
-  return {ok:true,id:documentId,createdItems:items.length,provider:'workers-ai',analyzer:'control-plan-table-parser-v1',model:'workers-ai-toMarkdown',documentSummary:summary,conversionTokens,conversionMode:'pdf-vision-table-parser',renderedPages:images.length,conversionQuality:'Kontrollplan extraherad deterministiskt från vision-Markdown-tabeller'};
+  const controlCount=items.filter(x=>x.itemType==='control').length;const documentationCount=items.filter(x=>x.itemType==='documentation').length;
+  const summary=`Kontrollplan: ${controlCount} kontrollpunkter och ${documentationCount} dokumentationspunkter extraherade radvis.`;
+  await env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,'workers-ai-toMarkdown','completed',?,?)`).bind(crypto.randomUUID(),documentId,'control-plan-table-parser-v2',summary,items.length).run();
+  return {ok:true,id:documentId,createdItems:items.length,provider:'workers-ai',analyzer:'control-plan-table-parser-v2',model:'workers-ai-toMarkdown',documentSummary:summary,conversionTokens,conversionMode:'pdf-vision-table-parser-retry',renderedPages:images.length,visionAttempts,retriedPages,pageResults,conversionQuality:'Kontrollplan extraherad deterministiskt; glesa tabellresultat körs om upp till tre gånger och bästa resultat väljs per sida'};
 }
