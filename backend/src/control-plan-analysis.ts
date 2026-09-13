@@ -8,7 +8,7 @@ type Kind='description'|'method'|'basis'|'legal'|'responsible'|'timing'|'other';
 type Col={kind:Kind;x:number;label:string};
 type Item={code:string;description:string;sectionCode:string;sectionTitle:string;itemType:'control'|'documentation';responsibleRole:string;evidenceRequired:string;sourceBasis:string;sourcePage:number;sourceQuote:string;action:string;timing:string};
 
-const ANALYZER='control-plan-layout-v13';
+const ANALYZER='control-plan-layout-v14';
 const clean=(v:unknown)=>typeof v==='string'?v.trim():'';
 const collapse=(v:string)=>v.replace(/\s+/g,' ').trim();
 const norm=(v:string)=>collapse(v).toLocaleLowerCase('sv-SE').replace(/&/g,' och ').replace(/[–—]/g,'-');
@@ -112,13 +112,14 @@ function detectColumns(page:Page,lines:Line[]){
 }
 
 function colFor(columns:Col[],item:PI):Kind{
+  if(!columns.length)return'other';
   const x=item.x;
+  if(x<columns[0].x)return columns[0].kind;
   for(let i=0;i<columns.length;i++){
-    const left=i?(columns[i-1].x+columns[i].x)/2:-Infinity;
-    const right=i<columns.length-1?(columns[i].x+columns[i+1].x)/2:Infinity;
-    if(x>=left&&x<right)return columns[i].kind;
+    const right=i<columns.length-1?columns[i+1].x:Infinity;
+    if(x>=columns[i].x&&x<right)return columns[i].kind;
   }
-  return'other';
+  return columns[columns.length-1].kind;
 }
 
 function sectionHeading(text:string){
@@ -337,6 +338,6 @@ export async function analyzeControlPlanDeterministically(env:Env,documentId:str
   await env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,?,'completed',?,?)`).bind(crypto.randomUUID(),documentId,ANALYZER,'pdfjs-layout-parser',summary,items.length).run();
   return{
     ok:true,id:documentId,createdItems:items.length,provider:'deterministic-layout',analyzer:ANALYZER,model:'pdfjs-layout-parser',documentSummary:summary,conversionMode:'pdf-positioned-table-layout',renderedPages:parsedPages.length,ocrPages:[],pageResults,
-    conversionQuality:'PDF-textens x/y-positioner, bredd och höjd bevaras. Efter kolumntilldelning rekonstrueras varje cell strikt i geometrisk läsordning: uppifrån och ned, och vänster till höger inom varje rad. Radgruppering använder textobjektens höjd och uppenbara ordfragment kan sättas ihop geometriskt. Ingen AI används för att ändra källtextens innebörd.'
+    conversionQuality:'PDF-textens x/y-positioner, bredd och höjd bevaras. Kolumnintervall följer tabellhuvudenas faktiska startpositioner i stället för mittpunkter mellan dem. Efter kolumntilldelning rekonstrueras varje cell i geometrisk läsordning. Ingen AI används för att ändra källtextens innebörd.'
   };
 }
