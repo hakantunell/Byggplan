@@ -7,20 +7,188 @@ type Line={y:number;items:PI[];text:string};
 type Kind='description'|'method'|'basis'|'legal'|'responsible'|'timing'|'other';
 type Col={kind:Kind;x:number;label:string};
 type Item={code:string;description:string;sectionCode:string;sectionTitle:string;itemType:'control'|'documentation';responsibleRole:string;evidenceRequired:string;sourceBasis:string;sourcePage:number;sourceQuote:string;action:string;timing:string};
-const ANALYZER='control-plan-layout-v9';
+
+const ANALYZER='control-plan-layout-v10';
 const clean=(v:unknown)=>typeof v==='string'?v.trim():'';
 const collapse=(v:string)=>v.replace(/\s+/g,' ').trim();
 const norm=(v:string)=>collapse(v).toLocaleLowerCase('sv-SE').replace(/&/g,' och ').replace(/[–—]/g,'-');
 const sec=(code:string)=>code.split('.')[0]||'';
-function codeIn(text:string){const m=text.replace(/(\d{1,2})\s*\.\s*(\d{1,2})/g,'$1.$2').match(/(?:^|\s)((?:\d{1,2}|[A-Z])\.\d{1,2})(?=\s|$|[^0-9A-Za-z])/);return m?.[1]||''}
-function makeLines(items:PI[]):Line[]{const out:Line[]=[];for(const it of [...items].sort((a,b)=>Math.abs(b.y-a.y)>2.2?b.y-a.y:a.x-b.x)){let l=out.find(x=>Math.abs(x.y-it.y)<=2.2);if(!l){l={y:it.y,items:[],text:''};out.push(l)}l.items.push(it)}out.sort((a,b)=>b.y-a.y);for(const l of out){l.items.sort((a,b)=>a.x-b.x);l.text=collapse(l.items.map(i=>i.text).join(' '))}return out}
-function headerKind(text:string):Kind|null{const t=norm(text);if(/moment|kontrollpunkt/.test(t))return'description';if(/hur.*kontroll|kontroll.*sker|kontrollmetod/.test(t))return'method';if(/mot vad|kontrolleras mot|underlag/.test(t))return'basis';if(/lagrum|föreskrift|regelverk/.test(t))return'legal';if(/kontrolleras av|vem kontrollerar|ansvarig/.test(t))return'responsible';if(/när|tidpunkt|skede/.test(t))return'timing';return null}
-function detectColumns(page:Page,ls:Line[]){const found:Col[]=[];for(const l of ls){for(const it of l.items){const k=headerKind(it.text);if(k&&!found.some(c=>c.kind===k))found.push({kind:k,x:it.x,label:it.text})}if(found.some(c=>c.kind==='description')&&found.some(c=>c.kind==='method')&&found.some(c=>c.kind==='responsible'))break}if(!found.some(c=>c.kind==='description')){const xs=ls.flatMap(l=>l.items.filter(i=>codeIn(i.text)).map(i=>i.x));found.push({kind:'description',x:xs.length?Math.min(...xs):page.width*.04,label:'Moment/kontrollpunkt'})}return found.sort((a,b)=>a.x-b.x)}
-function colFor(cs:Col[],x:number):Kind{for(let i=0;i<cs.length;i++){const left=i?(cs[i-1].x+cs[i].x)/2:-Infinity,right=i<cs.length-1?(cs[i].x+cs[i+1].x)/2:Infinity;if(x>=left&&x<right)return cs[i].kind}return'other'}
-function titles(ls:Line[]){const out=new Map<string,string>();for(const l of ls){const m=l.text.match(/^\s*(\d{1,2})\s+[.:-]?\s*([^\d].{2,80})$/);if(m&&!/^(sida|datum|fastighet|byggherre)/i.test(m[2]))out.set(m[1],collapse(m[2]))}return out}
-function parsePage(page:Page){const ls=makeLines(page.items),cols=detectColumns(page,ls),st=titles(ls),anchors=ls.map(l=>({l,code:codeIn(l.text)})).filter(x=>x.code),items:Item[]=[];for(let i=0;i<anchors.length;i++){const a=anchors[i],next=anchors[i+1],top=a.l.y+2.5,bottom=next?next.l.y+2.5:-Infinity,cells=new Map<Kind,PI[]>();for(const it of page.items.filter(x=>x.y<=top&&x.y>bottom)){const k=colFor(cols,it.x),arr=cells.get(k)||[];arr.push(it);cells.set(k,arr)}const cell=(k:Kind)=>collapse((cells.get(k)||[]).sort((a,b)=>Math.abs(b.y-a.y)>2.2?b.y-a.y:a.x-b.x).map(x=>x.text).join(' '));const re=new RegExp(`^\\s*${a.code.replace('.','\\s*\\.\\s*')}\\s*`),description=collapse(cell('description').replace(re,''));if(!description)continue;const method=cell('method'),basis=cell('basis'),legal=cell('legal'),responsible=cell('responsible'),timing=cell('timing'),quote=collapse([`${a.code} ${description}`,method,basis,legal,responsible,timing].filter(Boolean).join(' | '));items.push({code:a.code,description,sectionCode:sec(a.code),sectionTitle:st.get(sec(a.code))||'',itemType:'control',responsibleRole:responsible,evidenceRequired:'',sourceBasis:[basis,legal].filter(Boolean).join(' · '),sourcePage:page.page,sourceQuote:quote,action:description,timing})}const h=ls.findIndex(l=>/handlingar.*lämnas.*slutbesked/i.test(norm(l.text)));if(h>=0)for(let i=h+1;i<ls.length;i++){const q=ls[i].text;if(/^\d+\s*\(\s*\d+\s*\)$/.test(q))break;if(!/^[•·\-*–—]/.test(q))continue;const d=collapse(q.replace(/^[•·\-*–—]\s*/,''));if(d)items.push({code:'',description:d,sectionCode:'',sectionTitle:'Handlingar som lämnas in för slutbesked',itemType:'documentation',responsibleRole:'',evidenceRequired:'',sourceBasis:'',sourcePage:page.page,sourceQuote:q,action:d,timing:''})}return{items,columns:cols}}
-async function addCol(db:D1Database,sql:string){try{await db.prepare(sql).run()}catch(e){if(!String(e).toLowerCase().includes('duplicate column'))throw e}}
-async function ensure(db:D1Database){for(const sql of ["ALTER TABLE governing_items ADD COLUMN source_page INTEGER","ALTER TABLE governing_items ADD COLUMN source_quote TEXT NOT NULL DEFAULT ''","ALTER TABLE governing_items ADD COLUMN source_basis TEXT NOT NULL DEFAULT ''","ALTER TABLE governing_items ADD COLUMN confidence REAL NOT NULL DEFAULT 0","ALTER TABLE governing_items ADD COLUMN action_text TEXT NOT NULL DEFAULT ''","ALTER TABLE governing_items ADD COLUMN timing_text TEXT NOT NULL DEFAULT ''"])await addCol(db,sql);await db.prepare(`CREATE TABLE IF NOT EXISTS governing_document_analysis_runs(id TEXT PRIMARY KEY,governing_document_id TEXT NOT NULL,analyzer TEXT NOT NULL,model TEXT NOT NULL,status TEXT NOT NULL,document_summary TEXT NOT NULL DEFAULT '',item_count INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT (datetime('now')))`).run()}
+
+function codeIn(text:string){
+  const normalized=text.replace(/(\d{1,2})\s*\.\s*(\d{1,2})/g,'$1.$2');
+  const m=normalized.match(/(?:^|\s)((?:\d{1,2}|[A-Z])\.\d{1,2})(?=\s|$|[^0-9A-Za-z])/);
+  return m?.[1]||'';
+}
+
+function makeLines(items:PI[]):Line[]{
+  const out:Line[]=[];
+  for(const it of [...items].sort((a,b)=>Math.abs(b.y-a.y)>2.2?b.y-a.y:a.x-b.x)){
+    let line=out.find(x=>Math.abs(x.y-it.y)<=2.2);
+    if(!line){line={y:it.y,items:[],text:''};out.push(line)}
+    line.items.push(it);
+  }
+  out.sort((a,b)=>b.y-a.y);
+  for(const line of out){
+    line.items.sort((a,b)=>a.x-b.x);
+    line.text=collapse(line.items.map(i=>i.text).join(' '));
+  }
+  return out;
+}
+
+function headerKind(text:string):Kind|null{
+  const t=norm(text);
+  if(/moment|kontrollpunkt/.test(t))return'description';
+  if(/hur.*kontroll|kontroll.*sker|kontrollmetod/.test(t))return'method';
+  if(/mot vad|kontrolleras mot|underlag/.test(t))return'basis';
+  if(/pbl\s*\/\s*bbr|pbl.*bbr|avsnitt|lagrum|föreskrift|regelverk/.test(t))return'legal';
+  if(/kontrolleras av|vem kontrollerar|ansvarig/.test(t))return'responsible';
+  if(/när|tidpunkt|skede/.test(t))return'timing';
+  return null;
+}
+
+function detectColumns(page:Page,lines:Line[]){
+  const candidates=new Map<Kind,Col>();
+  for(const line of lines){
+    const lineKinds=line.items.map(it=>({it,kind:headerKind(it.text)})).filter(x=>x.kind) as {it:PI;kind:Kind}[];
+    const looksLikeHeader=/\bnr\b|moment|kontrollpunkt|hur.*kontroll|mot vad|pbl\s*\/\s*bbr|kontrolleras av|signatur|anmärkning/i.test(norm(line.text));
+    if(!looksLikeHeader&&lineKinds.length<2)continue;
+    for(const {it,kind} of lineKinds){
+      const existing=candidates.get(kind);
+      if(!existing||it.x<existing.x)candidates.set(kind,{kind,x:it.x,label:it.text});
+    }
+  }
+  if(!candidates.has('description')){
+    const xs=lines.flatMap(line=>line.items.filter(i=>codeIn(i.text)).map(i=>i.x));
+    candidates.set('description',{kind:'description',x:xs.length?Math.min(...xs):page.width*.04,label:'Moment/kontrollpunkt'});
+  }
+  return [...candidates.values()].sort((a,b)=>a.x-b.x);
+}
+
+function colFor(columns:Col[],x:number):Kind{
+  for(let i=0;i<columns.length;i++){
+    const left=i?(columns[i-1].x+columns[i].x)/2:-Infinity;
+    const right=i<columns.length-1?(columns[i].x+columns[i+1].x)/2:Infinity;
+    if(x>=left&&x<right)return columns[i].kind;
+  }
+  return'other';
+}
+
+function sectionHeading(text:string){
+  if(codeIn(text))return null;
+  const m=text.match(/^\s*(\d{1,2})\s*\.\s+([A-Za-zÅÄÖåäö][^\n]{1,80})\s*$/);
+  if(!m)return null;
+  const title=collapse(m[2]);
+  if(/\b(nr|moment|kontrollpunkt|sida|datum|fastighet|byggherre|signatur|anmärkning)\b/i.test(title))return null;
+  return{section:m[1],title};
+}
+
+function titles(lines:Line[]){
+  const out=new Map<string,string>();
+  for(const line of lines){
+    const heading=sectionHeading(line.text);
+    if(heading)out.set(heading.section,heading.title);
+  }
+  return out;
+}
+
+function isTableHeader(line:Line){
+  const t=norm(line.text);
+  return /\bnr\b/.test(t)&&(/moment|kontrollpunkt/.test(t)||/hur.*kontroll/.test(t)||/mot vad/.test(t)||/kontrolleras av/.test(t));
+}
+
+function isBoundary(line:Line){
+  return Boolean(codeIn(line.text)||sectionHeading(line.text)||isTableHeader(line)||/handlingar.*lämnas.*slutbesked/i.test(norm(line.text)));
+}
+
+function parsePage(page:Page){
+  const lines=makeLines(page.items);
+  const columns=detectColumns(page,lines);
+  const sectionTitles=titles(lines);
+  const anchors=lines.map((line,index)=>({line,index,code:codeIn(line.text)})).filter(x=>x.code);
+  const items:Item[]=[];
+
+  for(const anchor of anchors){
+    let boundary:Line|undefined;
+    for(let j=anchor.index+1;j<lines.length;j++){
+      if(isBoundary(lines[j])){boundary=lines[j];break}
+    }
+    const top=anchor.line.y+2.5;
+    const bottom=boundary?boundary.y+2.5:-Infinity;
+    const cells=new Map<Kind,PI[]>();
+
+    for(const it of page.items.filter(x=>x.y<=top&&x.y>bottom)){
+      const kind=colFor(columns,it.x);
+      const arr=cells.get(kind)||[];
+      arr.push(it);
+      cells.set(kind,arr);
+    }
+
+    const cell=(kind:Kind)=>collapse((cells.get(kind)||[])
+      .sort((a,b)=>Math.abs(b.y-a.y)>2.2?b.y-a.y:a.x-b.x)
+      .map(x=>x.text)
+      .join(' '));
+
+    const re=new RegExp(`^\\s*${anchor.code.replace('.','\\s*\\.\\s*')}\\s*`);
+    const description=collapse(cell('description').replace(re,''));
+    if(!description)continue;
+
+    const method=cell('method');
+    const basis=cell('basis');
+    const legal=cell('legal');
+    const responsible=cell('responsible');
+    const timing=cell('timing');
+    const sourceBasis=[basis,legal].filter(Boolean).join(' · ');
+    const quote=collapse([`${anchor.code} ${description}`,method,basis,legal,responsible,timing].filter(Boolean).join(' | '));
+
+    items.push({
+      code:anchor.code,
+      description,
+      sectionCode:sec(anchor.code),
+      sectionTitle:sectionTitles.get(sec(anchor.code))||'',
+      itemType:'control',
+      responsibleRole:responsible,
+      evidenceRequired:'',
+      sourceBasis,
+      sourcePage:page.page,
+      sourceQuote:quote,
+      action:description,
+      timing
+    });
+  }
+
+  const docsHeader=lines.findIndex(line=>/handlingar.*lämnas.*slutbesked/i.test(norm(line.text)));
+  if(docsHeader>=0){
+    for(let i=docsHeader+1;i<lines.length;i++){
+      const q=lines[i].text;
+      if(/^\d+\s*\(\s*\d+\s*\)$/.test(q))break;
+      if(!/^[•·\-*–—]/.test(q))continue;
+      const description=collapse(q.replace(/^[•·\-*–—]\s*/,''));
+      if(!description)continue;
+      items.push({
+        code:'',description,sectionCode:'',sectionTitle:'Handlingar som lämnas in för slutbesked',itemType:'documentation',responsibleRole:'',evidenceRequired:'',sourceBasis:'',sourcePage:page.page,sourceQuote:q,action:description,timing:''
+      });
+    }
+  }
+
+  return{items,columns};
+}
+
+async function addCol(db:D1Database,sql:string){
+  try{await db.prepare(sql).run()}catch(e){if(!String(e).toLowerCase().includes('duplicate column'))throw e}
+}
+
+async function ensure(db:D1Database){
+  for(const sql of [
+    "ALTER TABLE governing_items ADD COLUMN source_page INTEGER",
+    "ALTER TABLE governing_items ADD COLUMN source_quote TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE governing_items ADD COLUMN source_basis TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE governing_items ADD COLUMN confidence REAL NOT NULL DEFAULT 0",
+    "ALTER TABLE governing_items ADD COLUMN action_text TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE governing_items ADD COLUMN timing_text TEXT NOT NULL DEFAULT ''"
+  ])await addCol(db,sql);
+  await db.prepare(`CREATE TABLE IF NOT EXISTS governing_document_analysis_runs(id TEXT PRIMARY KEY,governing_document_id TEXT NOT NULL,analyzer TEXT NOT NULL,model TEXT NOT NULL,status TEXT NOT NULL,document_summary TEXT NOT NULL DEFAULT '',item_count INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT (datetime('now')))`).run();
+}
+
 async function pages(binding:any,ab:ArrayBuffer):Promise<Page[]>{
   if(!binding)throw new Error('Browser Run-binding saknas.');
   const browser=await puppeteer.launch(binding),p=await browser.newPage();
@@ -34,9 +202,9 @@ async function pages(binding:any,ab:ArrayBuffer):Promise<Page[]>{
       const pdf=await pdfjs.getDocument({data:new Uint8Array(bytes)}).promise;
       const out:any[]=[];
       for(let n=1;n<=Math.min(pdf.numPages,20);n++){
-        const pg=await pdf.getPage(n),v=pg.getViewport({scale:1}),c=await pg.getTextContent();
-        const items=(c.items||[]).map((x:any)=>({text:String(x.str||'').trim(),x:Number(x.transform?.[4]||0),y:Number(x.transform?.[5]||0)})).filter((x:any)=>x.text);
-        out.push({page:n,width:v.width,items});
+        const pg=await pdf.getPage(n),viewport=pg.getViewport({scale:1}),content=await pg.getTextContent();
+        const items=(content.items||[]).map((x:any)=>({text:String(x.str||'').trim(),x:Number(x.transform?.[4]||0),y:Number(x.transform?.[5]||0)})).filter((x:any)=>x.text);
+        out.push({page:n,width:viewport.width,items});
       }
       return out;
     },bytes) as Page[];
@@ -44,4 +212,55 @@ async function pages(binding:any,ab:ArrayBuffer):Promise<Page[]>{
     await browser.close().catch(()=>undefined);
   }
 }
-export async function analyzeControlPlanDeterministically(env:Env,documentId:string){await ensure(env.DB);const d=await env.DB.prepare(`SELECT d.document_type,f.object_key FROM governing_documents d JOIN governing_document_files f ON f.document_id=d.id WHERE d.id=?`).bind(documentId).first<any>();if(!d)throw new Error('Styrdokumentet eller originalfilen hittades inte.');if(String(d.document_type)!=='control_plan')throw new Error('Dokumentet är inte en kontrollplan.');const ex=await env.DB.prepare('SELECT COUNT(*) count FROM governing_items WHERE governing_document_id=?').bind(documentId).first<any>();if(Number(ex?.count||0)>0)throw new Error('Dokumentet är redan analyserat.');const obj=await env.FILES.get(String(d.object_key));if(!obj)throw new Error('Originalfilen saknas i fillagringen.');const ab=await obj.arrayBuffer();if(ab.byteLength>12*1024*1024)throw new Error('PDF-filen är för stor för kontrollplansanalys (max 12 MB).');const ps=await pages(env.BROWSER,ab),all:Item[]=[],pageResults:any[]=[];for(const pg of ps){const parsed=parsePage(pg);all.push(...parsed.items);pageResults.push({page:pg.page,source:'pdf-text-layout',detectedCodes:parsed.items.filter(x=>x.itemType==='control').map(x=>x.code),controls:parsed.items.filter(x=>x.itemType==='control').length,documentation:parsed.items.filter(x=>x.itemType==='documentation').length,columns:parsed.columns.map(c=>({kind:c.kind,x:Math.round(c.x),label:c.label}))})}const seen=new Set<string>(),items=all.filter(x=>{const k=x.itemType==='control'?`c|${x.code}|${x.sourcePage}`:`d|${norm(x.sourceQuote)}|${x.sourcePage}`;if(seen.has(k))return false;seen.add(k);return true});if(!items.length)throw new Error('Ingen kontrollpunkt kunde verifieras från PDF-layouten.');for(let i=0;i<items.length;i++){const x=items[i];await env.DB.prepare(`INSERT INTO governing_items(id,governing_document_id,code,description,section_code,section_title,item_type,responsible_role,evidence_required,handling_status,handling_comment,sort_order,source_note,source_basis,source_page,source_quote,confidence,action_text,timing_text) VALUES(?,?,?,?,?,?,?,?,?,'unhandled','',?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),documentId,x.code,x.description,x.sectionCode,x.sectionTitle,x.itemType,x.responsibleRole,x.evidenceRequired,(i+1)*10,`Sida ${x.sourcePage} · ${x.sourceQuote}`,x.sourceBasis,x.sourcePage,x.sourceQuote,0.99,x.action,x.timing).run()}await env.DB.prepare("UPDATE governing_documents SET status='active',updated_at=datetime('now') WHERE id=?").bind(documentId).run();const controls=items.filter(x=>x.itemType==='control').length,documentation=items.filter(x=>x.itemType==='documentation').length,summary=`Kontrollplan: ${controls} layoutverifierade kontrollpunkter och ${documentation} dokumentationspunkter.`;await env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,?,'completed',?,?)`).bind(crypto.randomUUID(),documentId,ANALYZER,'pdfjs-layout-parser',summary,items.length).run();return{ok:true,id:documentId,createdItems:items.length,provider:'deterministic-layout',analyzer:ANALYZER,model:'pdfjs-layout-parser',documentSummary:summary,conversionMode:'pdf-positioned-table-layout',renderedPages:ps.length,ocrPages:[],pageResults,conversionQuality:'PDF-textens x/y-positioner bevaras. Kontrollrader avgränsas med koder och text mappas till tabellkolumner utifrån rubrikernas x-positioner. Ingen AI används för att gissa kolumntillhörighet.'}}
+
+export async function analyzeControlPlanDeterministically(env:Env,documentId:string){
+  await ensure(env.DB);
+  const document=await env.DB.prepare(`SELECT d.document_type,f.object_key FROM governing_documents d JOIN governing_document_files f ON f.document_id=d.id WHERE d.id=?`).bind(documentId).first<any>();
+  if(!document)throw new Error('Styrdokumentet eller originalfilen hittades inte.');
+  if(String(document.document_type)!=='control_plan')throw new Error('Dokumentet är inte en kontrollplan.');
+  const existing=await env.DB.prepare('SELECT COUNT(*) count FROM governing_items WHERE governing_document_id=?').bind(documentId).first<any>();
+  if(Number(existing?.count||0)>0)throw new Error('Dokumentet är redan analyserat.');
+  const object=await env.FILES.get(String(document.object_key));
+  if(!object)throw new Error('Originalfilen saknas i fillagringen.');
+  const bytes=await object.arrayBuffer();
+  if(bytes.byteLength>12*1024*1024)throw new Error('PDF-filen är för stor för kontrollplansanalys (max 12 MB).');
+
+  const parsedPages=await pages(env.BROWSER,bytes),all:Item[]=[],pageResults:any[]=[];
+  for(const page of parsedPages){
+    const parsed=parsePage(page);
+    all.push(...parsed.items);
+    pageResults.push({
+      page:page.page,
+      source:'pdf-text-layout',
+      detectedCodes:parsed.items.filter(x=>x.itemType==='control').map(x=>x.code),
+      controls:parsed.items.filter(x=>x.itemType==='control').length,
+      documentation:parsed.items.filter(x=>x.itemType==='documentation').length,
+      columns:parsed.columns.map(c=>({kind:c.kind,x:Math.round(c.x),label:c.label}))
+    });
+  }
+
+  const seen=new Set<string>();
+  const items=all.filter(x=>{
+    const key=x.itemType==='control'?`c|${x.code}|${x.sourcePage}`:`d|${norm(x.sourceQuote)}|${x.sourcePage}`;
+    if(seen.has(key))return false;
+    seen.add(key);
+    return true;
+  });
+  if(!items.length)throw new Error('Ingen kontrollpunkt kunde verifieras från PDF-layouten.');
+
+  for(let i=0;i<items.length;i++){
+    const x=items[i];
+    await env.DB.prepare(`INSERT INTO governing_items(id,governing_document_id,code,description,section_code,section_title,item_type,responsible_role,evidence_required,handling_status,handling_comment,sort_order,source_note,source_basis,source_page,source_quote,confidence,action_text,timing_text) VALUES(?,?,?,?,?,?,?,?,?,'unhandled','',?,?,?,?,?,?,?,?)`)
+      .bind(crypto.randomUUID(),documentId,x.code,x.description,x.sectionCode,x.sectionTitle,x.itemType,x.responsibleRole,x.evidenceRequired,(i+1)*10,`Sida ${x.sourcePage} · ${x.sourceQuote}`,x.sourceBasis,x.sourcePage,x.sourceQuote,0.99,x.action,x.timing).run();
+  }
+
+  await env.DB.prepare("UPDATE governing_documents SET status='active',updated_at=datetime('now') WHERE id=?").bind(documentId).run();
+  const controls=items.filter(x=>x.itemType==='control').length;
+  const documentation=items.filter(x=>x.itemType==='documentation').length;
+  const summary=`Kontrollplan: ${controls} layoutverifierade kontrollpunkter och ${documentation} dokumentationspunkter.`;
+  await env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,?,'completed',?,?)`).bind(crypto.randomUUID(),documentId,ANALYZER,'pdfjs-layout-parser',summary,items.length).run();
+  return{
+    ok:true,id:documentId,createdItems:items.length,provider:'deterministic-layout',analyzer:ANALYZER,model:'pdfjs-layout-parser',documentSummary:summary,conversionMode:'pdf-positioned-table-layout',renderedPages:parsedPages.length,ocrPages:[],pageResults,
+    conversionQuality:'PDF-textens x/y-positioner bevaras. Kontrollrader avslutas vid nästa kontrollkod, sektionsrubrik eller tabellhuvud. Regelkolumn och ansvarskolumn hålls separata. Ingen AI används för att gissa kolumntillhörighet.'
+  };
+}
