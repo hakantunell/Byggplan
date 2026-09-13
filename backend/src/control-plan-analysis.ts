@@ -8,7 +8,7 @@ type Kind='description'|'method'|'basis'|'legal'|'responsible'|'timing'|'other';
 type Col={kind:Kind;x:number;label:string};
 type Item={code:string;description:string;sectionCode:string;sectionTitle:string;itemType:'control'|'documentation';responsibleRole:string;evidenceRequired:string;sourceBasis:string;sourcePage:number;sourceQuote:string;action:string;timing:string};
 
-const ANALYZER='control-plan-layout-v15';
+const ANALYZER='control-plan-layout-v16';
 const clean=(v:unknown)=>typeof v==='string'?v.trim():'';
 const collapse=(v:string)=>v.replace(/\s+/g,' ').trim();
 const norm=(v:string)=>collapse(v).toLocaleLowerCase('sv-SE').replace(/&/g,' och ').replace(/[–—]/g,'-');
@@ -17,7 +17,6 @@ const sec=(code:string)=>code.split('.')[0]||'';
 function cleanTypography(text:string){
   return collapse(text)
     .replace(/\s+([,.;:])/g,'$1')
-    .replace(/([A-Za-zÅÄÖåäö])\s+-\s+(?=[A-Za-zÅÄÖåäö])/g,'$1-')
     .replace(/\s+([)\]])/g,'$1')
     .replace(/([(\[])\s+/g,'$1')
     .replace(/[;,]\s*$/,'')
@@ -372,6 +371,6 @@ export async function analyzeControlPlanDeterministically(env:Env,documentId:str
   await env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,?,'completed',?,?)`).bind(crypto.randomUUID(),documentId,ANALYZER,'pdfjs-layout-parser',summary,items.length).run();
   return{
     ok:true,id:documentId,createdItems:items.length,provider:'deterministic-layout',analyzer:ANALYZER,model:'pdfjs-layout-parser',documentSummary:summary,conversionMode:'pdf-positioned-table-layout',renderedPages:parsedPages.length,ocrPages:[],pageResults,
-    conversionQuality:'PDF-textens x/y-positioner, bredd och höjd bevaras. Kolumnintervall följer tabellhuvudenas faktiska startpositioner. Celltext rekonstrueras i geometrisk läsordning. Ordfragment som bryts vid cellens högerkant kan återförenas över radbrytning och typografiskt whitespace runt skiljetecken normaliseras mekaniskt. Ingen AI används för att ändra källtextens innebörd.'
+    conversionQuality:'PDF-textens x/y-positioner, bredd och höjd bevaras. Kolumnintervall följer tabellhuvudenas faktiska startpositioner. Celltext rekonstrueras i geometrisk läsordning. Ordfragment som bryts vid cellens högerkant kan återförenas över radbrytning och typografiskt whitespace runt skiljetecken normaliseras mekaniskt. Bindestreck lämnas källtrogna. Ingen AI används för att ändra källtextens innebörd.'
   };
 }
