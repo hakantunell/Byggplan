@@ -1,14 +1,14 @@
 import puppeteer from '@cloudflare/puppeteer';
 
 type Env={DB:D1Database;FILES:R2Bucket;BROWSER:any;[key:string]:any};
-type PI={text:string;x:number;y:number};
+type PI={text:string;x:number;y:number;width:number};
 type Page={page:number;width:number;items:PI[]};
 type Line={y:number;items:PI[];text:string};
 type Kind='description'|'method'|'basis'|'legal'|'responsible'|'timing'|'other';
 type Col={kind:Kind;x:number;label:string};
 type Item={code:string;description:string;sectionCode:string;sectionTitle:string;itemType:'control'|'documentation';responsibleRole:string;evidenceRequired:string;sourceBasis:string;sourcePage:number;sourceQuote:string;action:string;timing:string};
 
-const ANALYZER='control-plan-layout-v10';
+const ANALYZER='control-plan-layout-v11';
 const clean=(v:unknown)=>typeof v==='string'?v.trim():'';
 const collapse=(v:string)=>v.replace(/\s+/g,' ').trim();
 const norm=(v:string)=>collapse(v).toLocaleLowerCase('sv-SE').replace(/&/g,' och ').replace(/[–—]/g,'-');
@@ -18,6 +18,22 @@ function codeIn(text:string){
   const normalized=text.replace(/(\d{1,2})\s*\.\s*(\d{1,2})/g,'$1.$2');
   const m=normalized.match(/(?:^|\s)((?:\d{1,2}|[A-Z])\.\d{1,2})(?=\s|$|[^0-9A-Za-z])/);
   return m?.[1]||'';
+}
+
+function joinPieces(items:PI[]){
+  const sorted=[...items].sort((a,b)=>a.x-b.x);
+  let out='';
+  let prev:PI|undefined;
+  for(const item of sorted){
+    if(!prev){out=item.text;prev=item;continue}
+    const gap=item.x-(prev.x+Math.max(0,prev.width));
+    const letters=/^[A-Za-zÅÄÖåäö]+$/;
+    const joinWord=gap<=0.8&&gap>=-1.5&&letters.test(prev.text)&&letters.test(item.text);
+    out+=joinWord?'':' ';
+    out+=item.text;
+    prev=item;
+  }
+  return collapse(out);
 }
 
 function makeLines(items:PI[]):Line[]{
@@ -30,9 +46,13 @@ function makeLines(items:PI[]):Line[]{
   out.sort((a,b)=>b.y-a.y);
   for(const line of out){
     line.items.sort((a,b)=>a.x-b.x);
-    line.text=collapse(line.items.map(i=>i.text).join(' '));
+    line.text=joinPieces(line.items);
   }
   return out;
+}
+
+function isPageFooter(line:Line){
+  return /^\s*\d+\s*\(\s*\d+\s*\)\s*$/.test(line.text);
 }
 
 function headerKind(text:string):Kind|null{
@@ -49,6 +69,7 @@ function headerKind(text:string):Kind|null{
 function detectColumns(page:Page,lines:Line[]){
   const candidates=new Map<Kind,Col>();
   for(const line of lines){
+    if(isPageFooter(line))continue;
     const lineKinds=line.items.map(it=>({it,kind:headerKind(it.text)})).filter(x=>x.kind) as {it:PI;kind:Kind}[];
     const looksLikeHeader=/\bnr\b|moment|kontrollpunkt|hur.*kontroll|mot vad|pbl\s*\/\s*bbr|kontrolleras av|signatur|anmärkning/i.test(norm(line.text));
     if(!looksLikeHeader&&lineKinds.length<2)continue;
@@ -64,11 +85,12 @@ function detectColumns(page:Page,lines:Line[]){
   return [...candidates.values()].sort((a,b)=>a.x-b.x);
 }
 
-function colFor(columns:Col[],x:number):Kind{
+function colFor(columns:Col[],item:PI):Kind{
+  const center=item.x+Math.max(0,item.width)/2;
   for(let i=0;i<columns.length;i++){
     const left=i?(columns[i-1].x+columns[i].x)/2:-Infinity;
     const right=i<columns.length-1?(columns[i].x+columns[i+1].x)/2:Infinity;
-    if(x>=left&&x<right)return columns[i].kind;
+    if(center>=left&&center<right)return columns[i].kind;
   }
   return'other';
 }
@@ -100,8 +122,40 @@ function isBoundary(line:Line){
   return Boolean(codeIn(line.text)||sectionHeading(line.text)||isTableHeader(line)||/handlingar.*lämnas.*slutbesked/i.test(norm(line.text)));
 }
 
+function assignCells(items:PI[],columns:Col[]){
+  const cells=new Map<Kind,PI[]>();
+  const lines=makeLines(items);
+  for(const line of lines){
+    let previous:PI|undefined;
+    let previousKind:Kind|undefined;
+    for(const item of [...line.items].sort((a,b)=>a.x-b.x)){
+      let kind=colFor(columns,item);
+      if(previous&&previousKind&&kind!==previousKind){
+        const gap=item.x-(previous.x+Math.max(0,previous.width));
+        const tiny=/^[A-Za-zÅÄÖåäö]{1,2}$/.test(item.text);
+        const previousWord=/^[A-Za-zÅÄÖåäö]+$/.test(previous.text);
+        if(tiny&&previousWord&&gap>=-1.5&&gap<=1.5)kind=previousKind;
+      }
+      const arr=cells.get(kind)||[];
+      arr.push(item);
+      cells.set(kind,arr);
+      previous=item;
+      previousKind=kind;
+    }
+  }
+  return cells;
+}
+
+function cellText(items:PI[]){
+  if(!items.length)return'';
+  return collapse(makeLines(items).map(line=>joinPieces(line.items)).filter(Boolean).join(' '));
+}
+
 function parsePage(page:Page){
-  const lines=makeLines(page.items);
+  const allLines=makeLines(page.items);
+  const footerYs=allLines.filter(isPageFooter).map(line=>line.y);
+  const usableItems=page.items.filter(item=>!footerYs.some(y=>Math.abs(y-item.y)<=2.2));
+  const lines=makeLines(usableItems);
   const columns=detectColumns(page,lines);
   const sectionTitles=titles(lines);
   const anchors=lines.map((line,index)=>({line,index,code:codeIn(line.text)})).filter(x=>x.code);
@@ -114,19 +168,9 @@ function parsePage(page:Page){
     }
     const top=anchor.line.y+2.5;
     const bottom=boundary?boundary.y+2.5:-Infinity;
-    const cells=new Map<Kind,PI[]>();
-
-    for(const it of page.items.filter(x=>x.y<=top&&x.y>bottom)){
-      const kind=colFor(columns,it.x);
-      const arr=cells.get(kind)||[];
-      arr.push(it);
-      cells.set(kind,arr);
-    }
-
-    const cell=(kind:Kind)=>collapse((cells.get(kind)||[])
-      .sort((a,b)=>Math.abs(b.y-a.y)>2.2?b.y-a.y:a.x-b.x)
-      .map(x=>x.text)
-      .join(' '));
+    const rowItems=usableItems.filter(x=>x.y<=top&&x.y>bottom);
+    const cells=assignCells(rowItems,columns);
+    const cell=(kind:Kind)=>cellText(cells.get(kind)||[]);
 
     const re=new RegExp(`^\\s*${anchor.code.replace('.','\\s*\\.\\s*')}\\s*`);
     const description=collapse(cell('description').replace(re,''));
@@ -160,7 +204,6 @@ function parsePage(page:Page){
   if(docsHeader>=0){
     for(let i=docsHeader+1;i<lines.length;i++){
       const q=lines[i].text;
-      if(/^\d+\s*\(\s*\d+\s*\)$/.test(q))break;
       if(!/^[•·\-*–—]/.test(q))continue;
       const description=collapse(q.replace(/^[•·\-*–—]\s*/,''));
       if(!description)continue;
@@ -203,7 +246,12 @@ async function pages(binding:any,ab:ArrayBuffer):Promise<Page[]>{
       const out:any[]=[];
       for(let n=1;n<=Math.min(pdf.numPages,20);n++){
         const pg=await pdf.getPage(n),viewport=pg.getViewport({scale:1}),content=await pg.getTextContent();
-        const items=(content.items||[]).map((x:any)=>({text:String(x.str||'').trim(),x:Number(x.transform?.[4]||0),y:Number(x.transform?.[5]||0)})).filter((x:any)=>x.text);
+        const items=(content.items||[]).map((x:any)=>({
+          text:String(x.str||'').trim(),
+          x:Number(x.transform?.[4]||0),
+          y:Number(x.transform?.[5]||0),
+          width:Number(x.width||0)
+        })).filter((x:any)=>x.text);
         out.push({page:n,width:viewport.width,items});
       }
       return out;
@@ -261,6 +309,6 @@ export async function analyzeControlPlanDeterministically(env:Env,documentId:str
   await env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,?,'completed',?,?)`).bind(crypto.randomUUID(),documentId,ANALYZER,'pdfjs-layout-parser',summary,items.length).run();
   return{
     ok:true,id:documentId,createdItems:items.length,provider:'deterministic-layout',analyzer:ANALYZER,model:'pdfjs-layout-parser',documentSummary:summary,conversionMode:'pdf-positioned-table-layout',renderedPages:parsedPages.length,ocrPages:[],pageResults,
-    conversionQuality:'PDF-textens x/y-positioner bevaras. Kontrollrader avslutas vid nästa kontrollkod, sektionsrubrik eller tabellhuvud. Regelkolumn och ansvarskolumn hålls separata. Ingen AI används för att gissa kolumntillhörighet.'
+    conversionQuality:'PDF-textens x/y-positioner och textbredd bevaras. Sidfötter filtreras bort, textobjekt mappas till kolumner med sin geometriska mittpunkt och celltext byggs radvis. Små ordfragment nära en kolumngräns hålls ihop med föregående ord. Ingen AI används för att gissa kolumntillhörighet.'
   };
 }
