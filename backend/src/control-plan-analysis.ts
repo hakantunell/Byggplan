@@ -8,11 +8,21 @@ type Kind='description'|'method'|'basis'|'legal'|'responsible'|'timing'|'other';
 type Col={kind:Kind;x:number;label:string};
 type Item={code:string;description:string;sectionCode:string;sectionTitle:string;itemType:'control'|'documentation';responsibleRole:string;evidenceRequired:string;sourceBasis:string;sourcePage:number;sourceQuote:string;action:string;timing:string};
 
-const ANALYZER='control-plan-layout-v14';
+const ANALYZER='control-plan-layout-v15';
 const clean=(v:unknown)=>typeof v==='string'?v.trim():'';
 const collapse=(v:string)=>v.replace(/\s+/g,' ').trim();
 const norm=(v:string)=>collapse(v).toLocaleLowerCase('sv-SE').replace(/&/g,' och ').replace(/[–—]/g,'-');
 const sec=(code:string)=>code.split('.')[0]||'';
+
+function cleanTypography(text:string){
+  return collapse(text)
+    .replace(/\s+([,.;:])/g,'$1')
+    .replace(/([A-Za-zÅÄÖåäö])\s+-\s+(?=[A-Za-zÅÄÖåäö])/g,'$1-')
+    .replace(/\s+([)\]])/g,'$1')
+    .replace(/([(\[])\s+/g,'$1')
+    .replace(/[;,]\s*$/,'')
+    .trim();
+}
 
 function codeIn(text:string){
   const normalized=text.replace(/(\d{1,2})\s*\.\s*(\d{1,2})/g,'$1.$2');
@@ -122,6 +132,11 @@ function colFor(columns:Col[],item:PI):Kind{
   return columns[columns.length-1].kind;
 }
 
+function columnRight(columns:Col[],kind:Kind){
+  const i=columns.findIndex(c=>c.kind===kind);
+  return i>=0&&i<columns.length-1?columns[i+1].x:Infinity;
+}
+
 function sectionHeading(text:string){
   if(codeIn(text))return null;
   const m=text.match(/^\s*(\d{1,2})\s*\.\s+([A-Za-zÅÄÖåäö][^\n]{1,80})\s*$/);
@@ -173,10 +188,29 @@ function assignCells(items:PI[],columns:Col[]){
   return cells;
 }
 
-function cellText(items:PI[]){
+function cellText(items:PI[],right=Infinity){
   if(!items.length)return'';
   const lines=makeCellReadingLines(items);
-  return collapse(lines.map(line=>line.text).filter(Boolean).join(' '));
+  let out='';
+  let previous:Line|undefined;
+  for(const line of lines){
+    const lineText=joinPieces(line.items);
+    let joinAcrossLine=false;
+    if(previous&&Number.isFinite(right)){
+      const previousText=joinPieces(previous.items);
+      const previousEnd=Math.max(...previous.items.map(x=>x.x+Math.max(0,x.width)));
+      const previousStart=Math.min(...previous.items.map(x=>x.x));
+      const currentStart=Math.min(...line.items.map(x=>x.x));
+      const nearRight=right-previousEnd>=-2&&right-previousEnd<=Math.max(18,Math.max(...previous.items.map(x=>x.height||8))*1.7);
+      const previousSingleWord=/^[A-Za-zÅÄÖåäö]{7,}$/.test(previousText);
+      const currentStartsLowercase=/^[a-zåäö]+(?:\s|$)/.test(lineText);
+      const sameLeft=Math.abs(previousStart-currentStart)<=3;
+      joinAcrossLine=nearRight&&previousSingleWord&&currentStartsLowercase&&sameLeft;
+    }
+    out+=(out&& !joinAcrossLine?' ':'')+lineText;
+    previous=line;
+  }
+  return cleanTypography(out);
 }
 
 function parsePage(page:Page){
@@ -198,10 +232,10 @@ function parsePage(page:Page){
     const bottom=boundary?boundary.y+2.5:-Infinity;
     const rowItems=usableItems.filter(x=>x.y<=top&&x.y>bottom);
     const cells=assignCells(rowItems,columns);
-    const cell=(kind:Kind)=>cellText(cells.get(kind)||[]);
+    const cell=(kind:Kind)=>cellText(cells.get(kind)||[],columnRight(columns,kind));
 
     const re=new RegExp(`^\\s*${anchor.code.replace('.','\\s*\\.\\s*')}\\s*`);
-    const description=collapse(cell('description').replace(re,''));
+    const description=cleanTypography(cell('description').replace(re,''));
     if(!description)continue;
 
     const method=cell('method');
@@ -209,8 +243,8 @@ function parsePage(page:Page){
     const legal=cell('legal');
     const responsible=cell('responsible');
     const timing=cell('timing');
-    const sourceBasis=[basis,legal].filter(Boolean).join(' · ');
-    const quote=collapse([`${anchor.code} ${description}`,method,basis,legal,responsible,timing].filter(Boolean).join(' | '));
+    const sourceBasis=cleanTypography([basis,legal].filter(Boolean).join(' · '));
+    const quote=cleanTypography([`${anchor.code} ${description}`,method,basis,legal,responsible,timing].filter(Boolean).join(' | '));
 
     items.push({
       code:anchor.code,
@@ -233,7 +267,7 @@ function parsePage(page:Page){
     for(let i=docsHeader+1;i<lines.length;i++){
       const q=lines[i].text;
       if(!/^[•·\-*–—]/.test(q))continue;
-      const description=collapse(q.replace(/^[•·\-*–—]\s*/,''));
+      const description=cleanTypography(q.replace(/^[•·\-*–—]\s*/,''));
       if(!description)continue;
       items.push({
         code:'',description,sectionCode:'',sectionTitle:'Handlingar som lämnas in för slutbesked',itemType:'documentation',responsibleRole:'',evidenceRequired:'',sourceBasis:'',sourcePage:page.page,sourceQuote:q,action:description,timing:''
@@ -338,6 +372,6 @@ export async function analyzeControlPlanDeterministically(env:Env,documentId:str
   await env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,?,'completed',?,?)`).bind(crypto.randomUUID(),documentId,ANALYZER,'pdfjs-layout-parser',summary,items.length).run();
   return{
     ok:true,id:documentId,createdItems:items.length,provider:'deterministic-layout',analyzer:ANALYZER,model:'pdfjs-layout-parser',documentSummary:summary,conversionMode:'pdf-positioned-table-layout',renderedPages:parsedPages.length,ocrPages:[],pageResults,
-    conversionQuality:'PDF-textens x/y-positioner, bredd och höjd bevaras. Kolumnintervall följer tabellhuvudenas faktiska startpositioner i stället för mittpunkter mellan dem. Efter kolumntilldelning rekonstrueras varje cell i geometrisk läsordning. Ingen AI används för att ändra källtextens innebörd.'
+    conversionQuality:'PDF-textens x/y-positioner, bredd och höjd bevaras. Kolumnintervall följer tabellhuvudenas faktiska startpositioner. Celltext rekonstrueras i geometrisk läsordning. Ordfragment som bryts vid cellens högerkant kan återförenas över radbrytning och typografiskt whitespace runt skiljetecken normaliseras mekaniskt. Ingen AI används för att ändra källtextens innebörd.'
   };
 }
