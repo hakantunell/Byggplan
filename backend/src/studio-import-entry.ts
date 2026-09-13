@@ -7,6 +7,7 @@ import { registerProjectDocumentRoutes } from './project-document-routes';
 import { registerProjectDocumentAnnotationRoutes } from './project-document-annotation-routes';
 import { registerProjectAdministrationRoutes } from './project-administration-routes';
 import { registerProjectManagementRoutes } from './project-management-routes';
+import { registerControlPlanLayoutDiagnosticsRoutes } from './control-plan-layout-diagnostics-routes';
 
 const IMPORT_RUNTIME_VERSION = '2026-08-11-v16';
 const ANNOTATION_RUNTIME_VERSION = '2026-08-14-v3';
@@ -88,5 +89,6 @@ registerProjectDocumentRoutes(app as any);
 registerProjectDocumentAnnotationRoutes(app as any);
 registerProjectAdministrationRoutes(app as any);
 registerProjectManagementRoutes(app as any);
+registerControlPlanLayoutDiagnosticsRoutes(app as any);
 
 export default app;
