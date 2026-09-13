@@ -8,7 +8,7 @@ type Kind='description'|'method'|'basis'|'legal'|'responsible'|'timing'|'other';
 type Col={kind:Kind;x:number;label:string};
 type Item={code:string;description:string;sectionCode:string;sectionTitle:string;itemType:'control'|'documentation';responsibleRole:string;evidenceRequired:string;sourceBasis:string;sourcePage:number;sourceQuote:string;action:string;timing:string};
 
-const ANALYZER='control-plan-layout-v11';
+const ANALYZER='control-plan-layout-v12';
 const clean=(v:unknown)=>typeof v==='string'?v.trim():'';
 const collapse=(v:string)=>v.replace(/\s+/g,' ').trim();
 const norm=(v:string)=>collapse(v).toLocaleLowerCase('sv-SE').replace(/&/g,' och ').replace(/[–—]/g,'-');
@@ -86,11 +86,11 @@ function detectColumns(page:Page,lines:Line[]){
 }
 
 function colFor(columns:Col[],item:PI):Kind{
-  const center=item.x+Math.max(0,item.width)/2;
+  const x=item.x;
   for(let i=0;i<columns.length;i++){
     const left=i?(columns[i-1].x+columns[i].x)/2:-Infinity;
     const right=i<columns.length-1?(columns[i].x+columns[i+1].x)/2:Infinity;
-    if(center>=left&&center<right)return columns[i].kind;
+    if(x>=left&&x<right)return columns[i].kind;
   }
   return'other';
 }
@@ -309,6 +309,6 @@ export async function analyzeControlPlanDeterministically(env:Env,documentId:str
   await env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,?,'completed',?,?)`).bind(crypto.randomUUID(),documentId,ANALYZER,'pdfjs-layout-parser',summary,items.length).run();
   return{
     ok:true,id:documentId,createdItems:items.length,provider:'deterministic-layout',analyzer:ANALYZER,model:'pdfjs-layout-parser',documentSummary:summary,conversionMode:'pdf-positioned-table-layout',renderedPages:parsedPages.length,ocrPages:[],pageResults,
-    conversionQuality:'PDF-textens x/y-positioner och textbredd bevaras. Sidfötter filtreras bort, textobjekt mappas till kolumner med sin geometriska mittpunkt och celltext byggs radvis. Små ordfragment nära en kolumngräns hålls ihop med föregående ord. Ingen AI används för att gissa kolumntillhörighet.'
+    conversionQuality:'PDF-textens x/y-positioner och textbredd bevaras. Sidfötter filtreras bort, kolumntilldelning använder textobjektets vänsterkant medan små ordfragment nära en kolumngräns hålls ihop med föregående ord. Celltext byggs radvis och ingen AI används för att gissa kolumntillhörighet.'
   };
 }
