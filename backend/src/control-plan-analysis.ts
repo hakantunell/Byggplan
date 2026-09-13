@@ -1,14 +1,14 @@
 import puppeteer from '@cloudflare/puppeteer';
 
 type Env={DB:D1Database;FILES:R2Bucket;BROWSER:any;[key:string]:any};
-type PI={text:string;x:number;y:number;width:number};
+type PI={text:string;x:number;y:number;width:number;height:number};
 type Page={page:number;width:number;items:PI[]};
 type Line={y:number;items:PI[];text:string};
 type Kind='description'|'method'|'basis'|'legal'|'responsible'|'timing'|'other';
 type Col={kind:Kind;x:number;label:string};
 type Item={code:string;description:string;sectionCode:string;sectionTitle:string;itemType:'control'|'documentation';responsibleRole:string;evidenceRequired:string;sourceBasis:string;sourcePage:number;sourceQuote:string;action:string;timing:string};
 
-const ANALYZER='control-plan-layout-v12';
+const ANALYZER='control-plan-layout-v13';
 const clean=(v:unknown)=>typeof v==='string'?v.trim():'';
 const collapse=(v:string)=>v.replace(/\s+/g,' ').trim();
 const norm=(v:string)=>collapse(v).toLocaleLowerCase('sv-SE').replace(/&/g,' och ').replace(/[–—]/g,'-');
@@ -28,7 +28,8 @@ function joinPieces(items:PI[]){
     if(!prev){out=item.text;prev=item;continue}
     const gap=item.x-(prev.x+Math.max(0,prev.width));
     const letters=/^[A-Za-zÅÄÖåäö]+$/;
-    const joinWord=gap<=0.8&&gap>=-1.5&&letters.test(prev.text)&&letters.test(item.text);
+    const fragmentGap=Math.max(1.2,Math.min(1.8,Math.max(prev.height,item.height)*0.18));
+    const joinWord=gap<=fragmentGap&&gap>=-1.5&&letters.test(prev.text)&&letters.test(item.text);
     out+=joinWord?'':' ';
     out+=item.text;
     prev=item;
@@ -49,6 +50,31 @@ function makeLines(items:PI[]):Line[]{
     line.text=joinPieces(line.items);
   }
   return out;
+}
+
+function makeCellReadingLines(items:PI[]):Line[]{
+  const lines:Line[]=[];
+  const sorted=[...items].sort((a,b)=>Math.abs(b.y-a.y)>0.5?b.y-a.y:a.x-b.x);
+  for(const item of sorted){
+    const tolerance=Math.max(1.5,Math.min(3.2,(item.height||8)*0.32));
+    let best:Line|undefined;
+    let bestDistance=Infinity;
+    for(const line of lines){
+      const distance=Math.abs(line.y-item.y);
+      const lineHeight=Math.max(...line.items.map(x=>x.height||8),item.height||8);
+      const lineTolerance=Math.max(tolerance,Math.max(1.5,Math.min(3.2,lineHeight*0.32)));
+      if(distance<=lineTolerance&&distance<bestDistance){best=line;bestDistance=distance}
+    }
+    if(!best){best={y:item.y,items:[],text:''};lines.push(best)}
+    best.items.push(item);
+    best.y=best.items.reduce((sum,x)=>sum+x.y,0)/best.items.length;
+  }
+  lines.sort((a,b)=>b.y-a.y);
+  for(const line of lines){
+    line.items.sort((a,b)=>a.x-b.x);
+    line.text=joinPieces(line.items);
+  }
+  return lines;
 }
 
 function isPageFooter(line:Line){
@@ -134,7 +160,7 @@ function assignCells(items:PI[],columns:Col[]){
         const gap=item.x-(previous.x+Math.max(0,previous.width));
         const tiny=/^[A-Za-zÅÄÖåäö]{1,2}$/.test(item.text);
         const previousWord=/^[A-Za-zÅÄÖåäö]+$/.test(previous.text);
-        if(tiny&&previousWord&&gap>=-1.5&&gap<=1.5)kind=previousKind;
+        if(tiny&&previousWord&&gap>=-1.5&&gap<=1.8)kind=previousKind;
       }
       const arr=cells.get(kind)||[];
       arr.push(item);
@@ -148,7 +174,8 @@ function assignCells(items:PI[],columns:Col[]){
 
 function cellText(items:PI[]){
   if(!items.length)return'';
-  return collapse(makeLines(items).map(line=>joinPieces(line.items)).filter(Boolean).join(' '));
+  const lines=makeCellReadingLines(items);
+  return collapse(lines.map(line=>line.text).filter(Boolean).join(' '));
 }
 
 function parsePage(page:Page){
@@ -250,7 +277,8 @@ async function pages(binding:any,ab:ArrayBuffer):Promise<Page[]>{
           text:String(x.str||'').trim(),
           x:Number(x.transform?.[4]||0),
           y:Number(x.transform?.[5]||0),
-          width:Number(x.width||0)
+          width:Number(x.width||0),
+          height:Number(x.height||Math.abs(x.transform?.[3]||0)||0)
         })).filter((x:any)=>x.text);
         out.push({page:n,width:viewport.width,items});
       }
@@ -309,6 +337,6 @@ export async function analyzeControlPlanDeterministically(env:Env,documentId:str
   await env.DB.prepare(`INSERT INTO governing_document_analysis_runs(id,governing_document_id,analyzer,model,status,document_summary,item_count) VALUES(?,?,?,?,'completed',?,?)`).bind(crypto.randomUUID(),documentId,ANALYZER,'pdfjs-layout-parser',summary,items.length).run();
   return{
     ok:true,id:documentId,createdItems:items.length,provider:'deterministic-layout',analyzer:ANALYZER,model:'pdfjs-layout-parser',documentSummary:summary,conversionMode:'pdf-positioned-table-layout',renderedPages:parsedPages.length,ocrPages:[],pageResults,
-    conversionQuality:'PDF-textens x/y-positioner och textbredd bevaras. Sidfötter filtreras bort, kolumntilldelning använder textobjektets vänsterkant medan små ordfragment nära en kolumngräns hålls ihop med föregående ord. Celltext byggs radvis och ingen AI används för att gissa kolumntillhörighet.'
+    conversionQuality:'PDF-textens x/y-positioner, bredd och höjd bevaras. Efter kolumntilldelning rekonstrueras varje cell strikt i geometrisk läsordning: uppifrån och ned, och vänster till höger inom varje rad. Radgruppering använder textobjektens höjd och uppenbara ordfragment kan sättas ihop geometriskt. Ingen AI används för att ändra källtextens innebörd.'
   };
 }
