@@ -2,7 +2,7 @@ import authEntry from './auth-entry';
 import internalApp from './attestation-entry';
 import {authConfigured,sessionUserFromRequest} from './auth-session';
 import {canAccessProject,ensureWorkspaceSchema} from './workspace-access';
-import {analyzeControlPlanDeterministically} from './control-plan-deterministic-analysis';
+import {analyzeControlPlanDeterministically} from './control-plan-deterministic-analysis-v8';
 
 type Env={
   DB:D1Database;
