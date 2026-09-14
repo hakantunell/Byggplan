@@ -3,6 +3,7 @@ import { registerGoverningAttestationRoutes } from './governing-attestation-rout
 import { registerActivityOwnDocumentationRoutes } from './activity-own-documentation-routes';
 import { registerActivityCommentRoutes } from './activity-comment-routes';
 import { registerActivityMoveRoutes } from './activity-move-routes';
+import { registerActivityDependencyRoutes } from './activity-dependency-routes';
 import { registerProjectDocumentCategoryRoutes } from './project-document-category-routes';
 import { registerProjectDrawingPaletteRoutes } from './project-drawing-palette-routes';
 import { registerAuthRoutes } from './auth-routes';
@@ -23,6 +24,7 @@ registerGoverningAttestationRoutes(app as any);
 registerActivityOwnDocumentationRoutes(app as any);
 registerActivityCommentRoutes(app as any);
 registerActivityMoveRoutes(app as any);
+registerActivityDependencyRoutes(app as any);
 registerProjectDocumentCategoryRoutes(app as any);
 registerProjectDrawingPaletteRoutes(app as any);
 registerProjectInformationRoutes(app as any);
