@@ -4,6 +4,7 @@ import { registerActivityOwnDocumentationRoutes } from './activity-own-documenta
 import { registerActivityCommentRoutes } from './activity-comment-routes';
 import { registerActivityMoveRoutes } from './activity-move-routes';
 import { registerActivityDependencyRoutes } from './activity-dependency-routes';
+import { registerProjectGraphStateRoutes } from './project-graph-state-routes';
 import { registerProjectDocumentCategoryRoutes } from './project-document-category-routes';
 import { registerProjectDrawingPaletteRoutes } from './project-drawing-palette-routes';
 import { registerAuthRoutes } from './auth-routes';
@@ -25,6 +26,7 @@ registerActivityOwnDocumentationRoutes(app as any);
 registerActivityCommentRoutes(app as any);
 registerActivityMoveRoutes(app as any);
 registerActivityDependencyRoutes(app as any);
+registerProjectGraphStateRoutes(app as any);
 registerProjectDocumentCategoryRoutes(app as any);
 registerProjectDrawingPaletteRoutes(app as any);
 registerProjectInformationRoutes(app as any);
