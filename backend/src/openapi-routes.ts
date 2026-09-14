@@ -12,17 +12,18 @@ export function registerOpenApiRoutes(app:RouteApp){
     openapi:'3.1.0',
     info:{
       title:'ByggPlan API',
-      version:'2026-09-13',
+      version:'2026-09-14',
       description:'Intern OpenAPI-specifikation för ByggPlan Studio. API Browser i Studio använder samma-origin-transporten, vilket gör att anrop fungerar även på nätverk som blockerar synliga URL-sökvägar.'
     },
     servers:[{url:'/',description:'ByggPlan Studio same-origin transport'}],
     tags:[
-      {name:'Projekt'},{name:'Struktur'},{name:'Projektstyrning'},{name:'Styrdokument'},{name:'Master'},{name:'Fältmetadata'},{name:'Diagnostik'}
+      {name:'Projekt'},{name:'Struktur'},{name:'Projektstyrning'},{name:'Beroenden'},{name:'Styrdokument'},{name:'Master'},{name:'Fältmetadata'},{name:'Diagnostik'}
     ],
     paths:{
       '/api/projects':{get:{tags:['Projekt'],summary:'Lista projekt',responses:{'200':ok}}},
       '/api/studio/structure':{get:{tags:['Struktur'],summary:'Läs projektets redigerbara struktur',parameters:[{name:'projectId',in:'query',required:true,schema:{type:'string'}}],responses:{'200':ok}}},
       '/api/studio/projects/{projectId}/structure-audit':{get:{tags:['Diagnostik'],summary:'Strukturrevision',description:'Read-only revision av hela projektträdet med metadata och misstänkta strukturproblem/dubletter.',parameters:[projectId],responses:{'200':ok}}},
+      '/api/studio/activity-dependencies':{get:{tags:['Beroenden'],summary:'Läs aktivitetsberoenden för projekt',description:'Returnerar de aktivitets- och administrativa beroenden som är lagrade i databasen för projektet. activity_id är den beroende aktiviteten och required_activity_id är föregående aktivitet när dependency_type är activity.',parameters:[{name:'projectId',in:'query',required:true,schema:{type:'string'},description:'Projektets UUID'}],responses:{'200':ok,'400':ok}}},
       '/api/studio/projects/{projectId}/project-conditions':{
         get:{tags:['Projektstyrning'],summary:'Lista projektvillkor',parameters:[projectId],responses:{'200':ok}},
         post:{tags:['Projektstyrning'],summary:'Skapa projektspecifikt projektvillkor',parameters:[projectId],requestBody:jsonBody('Projektvillkor',{title:'Fuktskydd under byggtid',description:'Material och konstruktion ska skyddas mot nederbörd och byggfukt under hela byggtiden.'}),responses:{'201':ok}}
