@@ -2,12 +2,22 @@ import type { AuthUser } from './auth-session';
 
 export type WorkspaceRole='workspace_admin'|'member';
 
+let workspaceSchemaReady=false;
+let workspaceSchemaPromise:Promise<void>|null=null;
+
 async function columnExists(db:D1Database,table:string,column:string){
  const rows=await db.prepare(`PRAGMA table_info(${table})`).all();
  return (rows.results as any[]).some(r=>String(r.name)===column);
 }
 
-export async function ensureWorkspaceSchema(db:D1Database){
+async function workspaceSchemaIsCurrent(db:D1Database){
+ try{
+  const row=await db.prepare("SELECT 1 ok FROM workspace_schema_meta WHERE key='seed_legacy_global_admins_v3' LIMIT 1").first();
+  return Boolean(row);
+ }catch{return false}
+}
+
+async function performWorkspaceSchemaEnsure(db:D1Database){
  await db.prepare(`CREATE TABLE IF NOT EXISTS workspaces(
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -88,6 +98,17 @@ export async function ensureWorkspaceSchema(db:D1Database){
    FROM project_memberships pm JOIN projects p ON p.id=pm.project_id
    WHERE pm.status='active' AND p.workspace_id IS NOT NULL`).run();
  }catch{}
+}
+
+export async function ensureWorkspaceSchema(db:D1Database){
+ if(workspaceSchemaReady)return;
+ if(workspaceSchemaPromise)return workspaceSchemaPromise;
+ workspaceSchemaPromise=(async()=>{
+  if(await workspaceSchemaIsCurrent(db)){workspaceSchemaReady=true;return}
+  await performWorkspaceSchemaEnsure(db);
+  workspaceSchemaReady=true;
+ })();
+ try{await workspaceSchemaPromise}finally{if(!workspaceSchemaReady)workspaceSchemaPromise=null}
 }
 
 export async function isSystemAdmin(db:D1Database,user:AuthUser){
