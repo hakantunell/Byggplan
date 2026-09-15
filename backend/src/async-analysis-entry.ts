@@ -3,6 +3,7 @@ import internalApp from './attestation-entry';
 import {authConfigured,sessionUserFromRequest} from './auth-session';
 import {canAccessProject,ensureWorkspaceSchema} from './workspace-access';
 import {analyzeControlPlanDeterministically} from './control-plan-analysis';
+import {projectTasksFast} from './project-tasks-fast';
 
 type Env={
   DB:D1Database;
@@ -107,6 +108,10 @@ async function processMessage(message:any,env:Env,ctx:ExecutionContext){
 export default {
   async fetch(request:Request,env:Env,ctx:ExecutionContext):Promise<Response>{
     const url=new URL(request.url);
+    if(request.method==='GET'&&url.pathname==='/api/tasks'){
+      const projectId=String(url.searchParams.get('projectId')||'');
+      if(projectId)return projectTasksFast(request,env,projectId);
+    }
     const start=url.pathname.match(/^\/api\/studio\/governing-documents\/([^/]+)\/analyze-generic$/);
     if(request.method==='POST'&&start)return queueAnalysis(request,env,decodeURIComponent(start[1]));
     const status=url.pathname.match(/^\/api\/studio\/governing-documents\/([^/]+)\/analysis-status$/);
