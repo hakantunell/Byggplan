@@ -2,13 +2,23 @@ export type AuthUser={id:string;email:string;display_name:string;status:string};
 const COOKIE='bp_session';
 const SESSION_DAYS=14;
 const PASSWORD_ITERATIONS=100000;
+let authSchemaReady=false;
+let authSchemaPromise:Promise<void>|null=null;
+let configuredCache=false;
 
 function bytesToHex(bytes:Uint8Array){return [...bytes].map(b=>b.toString(16).padStart(2,'0')).join('')}
 function bytesToBase64(bytes:Uint8Array){let s='';for(const b of bytes)s+=String.fromCharCode(b);return btoa(s)}
 function base64ToBytes(value:string){const s=atob(value);return Uint8Array.from(s,c=>c.charCodeAt(0))}
 async function sha256(value:string){const data=new TextEncoder().encode(value);return bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256',data)))}
 
-export async function ensureAuthSchema(db:D1Database){
+async function authSchemaIsCurrent(db:D1Database){
+ try{
+  const row=await db.prepare("SELECT COUNT(*) count FROM sqlite_master WHERE type='table' AND name IN ('user_credentials','auth_sessions')").first<any>();
+  return Number(row?.count||0)===2;
+ }catch{return false}
+}
+
+async function performAuthSchemaEnsure(db:D1Database){
  await db.prepare(`CREATE TABLE IF NOT EXISTS user_credentials(
    user_id TEXT PRIMARY KEY,
    password_salt TEXT NOT NULL,
@@ -30,8 +40,20 @@ export async function ensureAuthSchema(db:D1Database){
  await db.prepare('CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id,expires_at)').run();
 }
 
+export async function ensureAuthSchema(db:D1Database){
+ if(authSchemaReady)return;
+ if(authSchemaPromise)return authSchemaPromise;
+ authSchemaPromise=(async()=>{
+  if(await authSchemaIsCurrent(db)){authSchemaReady=true;return}
+  await performAuthSchemaEnsure(db);
+  authSchemaReady=true;
+ })();
+ try{await authSchemaPromise}finally{if(!authSchemaReady)authSchemaPromise=null}
+}
+
 export async function authConfigured(db:D1Database){
- try{const row=await db.prepare('SELECT COUNT(*) count FROM user_credentials').first<any>();return Number(row?.count||0)>0}catch{return false}
+ if(configuredCache)return true;
+ try{const row=await db.prepare('SELECT 1 ok FROM user_credentials LIMIT 1').first<any>();configuredCache=Boolean(row);return configuredCache}catch{return false}
 }
 
 export async function hashPassword(password:string,salt?:Uint8Array,iterations=PASSWORD_ITERATIONS){
@@ -62,6 +84,7 @@ export async function createSession(c:any,userId:string){
  const token=bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
  const tokenHash=await sha256(token),id=crypto.randomUUID();
  await c.env.DB.prepare(`INSERT INTO auth_sessions(id,user_id,token_hash,expires_at) VALUES(?,?,?,datetime('now',?))`).bind(id,userId,tokenHash,`+${SESSION_DAYS} days`).run();
+ configuredCache=true;
  return`${COOKIE}=${encodeURIComponent(token)}; Path=/; Domain=.byggplan.tunell.org; Max-Age=${SESSION_DAYS*86400}; HttpOnly; Secure; SameSite=Lax`;
 }
 
