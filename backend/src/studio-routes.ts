@@ -152,8 +152,28 @@ app.put('/api/studio/tasks/:id', async c => {
 
 app.delete('/api/studio/tasks/:id', async c => {
   const id = c.req.param('id');
-  const children = await c.env.DB.prepare('SELECT COUNT(*) AS count FROM activities WHERE task_id=?').bind(id).first<{ count: number }>();
+  const children = await c.env.DB.prepare(`
+    SELECT COUNT(*) AS count
+    FROM activities a
+    LEFT JOIN activity_contexts ac ON ac.activity_id=a.id
+    WHERE a.task_id=? AND COALESCE(ac.applicability,'always')<>'deprecated'
+  `).bind(id).first<{ count: number }>();
   if ((children?.count ?? 0) > 0) return c.json({ ok: false, error: 'Momentet innehåller aktiviteter. Ta bort dem först.' }, 409);
+
+  // Deprecated activities are hidden in Studio. If they are the only remaining
+  // children, remove them together with the task instead of blocking deletion
+  // on data the user cannot see or edit.
+  await c.env.DB.prepare(`
+    DELETE FROM activities
+    WHERE task_id=?
+      AND id IN (
+        SELECT a.id
+        FROM activities a
+        JOIN activity_contexts ac ON ac.activity_id=a.id
+        WHERE a.task_id=? AND ac.applicability='deprecated'
+      )
+  `).bind(id, id).run();
+
   const result = await c.env.DB.prepare('DELETE FROM tasks WHERE id=?').bind(id).run();
   if (!result.meta.changes) return c.json({ ok: false, error: 'Momentet hittades inte.' }, 404);
   return c.json({ ok: true });
