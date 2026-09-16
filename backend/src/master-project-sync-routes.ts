@@ -2,23 +2,28 @@ import {sessionUser} from './auth-session';
 import {isSystemAdmin} from './workspace-access';
 
 type RouteApp={post:(path:string,handler:(c:any)=>unknown)=>void};
-
 type GraphState={dependencies:Record<string,string[]>;positions:Record<string,unknown>;routes:Record<string,unknown>};
 
 function parseObject(raw:unknown){try{const value=JSON.parse(String(raw||'{}'));return value&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,any>:{} }catch{return{}}}
 function errorDetail(error:unknown){return error instanceof Error?error.message:String(error)}
 
-async function ensureSchema(db:D1Database){
- await db.prepare(`CREATE TABLE IF NOT EXISTS project_master_snapshots(project_id TEXT PRIMARY KEY,master_project_id TEXT NOT NULL,master_project_code TEXT NOT NULL,master_project_version INTEGER NOT NULL,created_at TEXT NOT NULL DEFAULT (datetime('now')),FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE)`).run();
- await db.prepare(`CREATE TABLE IF NOT EXISTS project_master_node_links(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,entity_type TEXT NOT NULL CHECK(entity_type IN ('work_area','work_section','task','activity')),entity_id TEXT NOT NULL,master_entity_id TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT (datetime('now')),UNIQUE(project_id,entity_type,entity_id),FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE)`).run();
- await db.prepare(`CREATE TABLE IF NOT EXISTS activity_contexts(activity_id TEXT PRIMARY KEY,lifecycle_stage TEXT NOT NULL DEFAULT 'build',surface TEXT NOT NULL DEFAULT 'field',applicability TEXT NOT NULL DEFAULT 'always',condition_text TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL DEFAULT (datetime('now')),FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE CASCADE)`).run();
- await db.prepare(`CREATE TABLE IF NOT EXISTS master_activity_contexts(master_activity_id TEXT PRIMARY KEY,lifecycle_stage TEXT NOT NULL DEFAULT 'build',surface TEXT NOT NULL DEFAULT 'field',applicability TEXT NOT NULL DEFAULT 'always',condition_text TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL DEFAULT (datetime('now')),FOREIGN KEY(master_activity_id) REFERENCES master_activities(id) ON DELETE CASCADE)`).run();
- await db.prepare(`CREATE TABLE IF NOT EXISTS master_graph_states(master_project_id TEXT PRIMARY KEY,dependencies_json TEXT NOT NULL DEFAULT '{}',positions_json TEXT NOT NULL DEFAULT '{}',routes_json TEXT NOT NULL DEFAULT '{}',updated_at TEXT NOT NULL DEFAULT (datetime('now')),FOREIGN KEY(master_project_id) REFERENCES master_projects(id) ON DELETE CASCADE)`).run();
- await db.prepare(`CREATE TABLE IF NOT EXISTS project_graph_states(project_id TEXT PRIMARY KEY,dependencies_json TEXT NOT NULL DEFAULT '{}',positions_json TEXT NOT NULL DEFAULT '{}',routes_json TEXT NOT NULL DEFAULT '{}',updated_at TEXT NOT NULL DEFAULT (datetime('now')),FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE)`).run();
+async function runBatchChunks(db:D1Database,statements:any[],chunkSize=80){
+ for(let i=0;i<statements.length;i+=chunkSize)await db.batch(statements.slice(i,i+chunkSize));
 }
 
-async function link(db:D1Database,projectId:string,type:string,entityId:string,masterId:string){
- await db.prepare(`INSERT INTO project_master_node_links(id,project_id,entity_type,entity_id,master_entity_id) VALUES(?,?,?,?,?) ON CONFLICT(project_id,entity_type,entity_id) DO UPDATE SET master_entity_id=excluded.master_entity_id`).bind(crypto.randomUUID(),projectId,type,entityId,masterId).run();
+async function ensureSchema(db:D1Database){
+ await db.batch([
+  db.prepare(`CREATE TABLE IF NOT EXISTS project_master_snapshots(project_id TEXT PRIMARY KEY,master_project_id TEXT NOT NULL,master_project_code TEXT NOT NULL,master_project_version INTEGER NOT NULL,created_at TEXT NOT NULL DEFAULT (datetime('now')),FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE)`),
+  db.prepare(`CREATE TABLE IF NOT EXISTS project_master_node_links(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,entity_type TEXT NOT NULL CHECK(entity_type IN ('work_area','work_section','task','activity')),entity_id TEXT NOT NULL,master_entity_id TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT (datetime('now')),UNIQUE(project_id,entity_type,entity_id),FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE)`),
+  db.prepare(`CREATE TABLE IF NOT EXISTS activity_contexts(activity_id TEXT PRIMARY KEY,lifecycle_stage TEXT NOT NULL DEFAULT 'build',surface TEXT NOT NULL DEFAULT 'field',applicability TEXT NOT NULL DEFAULT 'always',condition_text TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL DEFAULT (datetime('now')),FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE CASCADE)`),
+  db.prepare(`CREATE TABLE IF NOT EXISTS master_activity_contexts(master_activity_id TEXT PRIMARY KEY,lifecycle_stage TEXT NOT NULL DEFAULT 'build',surface TEXT NOT NULL DEFAULT 'field',applicability TEXT NOT NULL DEFAULT 'always',condition_text TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL DEFAULT (datetime('now')),FOREIGN KEY(master_activity_id) REFERENCES master_activities(id) ON DELETE CASCADE)`),
+  db.prepare(`CREATE TABLE IF NOT EXISTS master_graph_states(master_project_id TEXT PRIMARY KEY,dependencies_json TEXT NOT NULL DEFAULT '{}',positions_json TEXT NOT NULL DEFAULT '{}',routes_json TEXT NOT NULL DEFAULT '{}',updated_at TEXT NOT NULL DEFAULT (datetime('now')),FOREIGN KEY(master_project_id) REFERENCES master_projects(id) ON DELETE CASCADE)`),
+  db.prepare(`CREATE TABLE IF NOT EXISTS project_graph_states(project_id TEXT PRIMARY KEY,dependencies_json TEXT NOT NULL DEFAULT '{}',positions_json TEXT NOT NULL DEFAULT '{}',routes_json TEXT NOT NULL DEFAULT '{}',updated_at TEXT NOT NULL DEFAULT (datetime('now')),FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE)`)
+ ]);
+}
+
+function linkStatement(db:D1Database,projectId:string,type:string,entityId:string,masterId:string){
+ return db.prepare(`INSERT INTO project_master_node_links(id,project_id,entity_type,entity_id,master_entity_id) VALUES(?,?,?,?,?) ON CONFLICT(project_id,entity_type,entity_id) DO UPDATE SET master_entity_id=excluded.master_entity_id`).bind(crypto.randomUUID(),projectId,type,entityId,masterId);
 }
 
 function remapGraph(row:any,taskMap:Map<string,string>):GraphState{
@@ -47,83 +52,108 @@ export function registerMasterProjectSyncRoutes(app:RouteApp){
    const user=await sessionUser(c);if(!user)return c.json({ok:false,error:'Du måste vara inloggad.'},401);
    if(!await isSystemAdmin(c.env.DB,user))return c.json({ok:false,error:'Endast systemadministratör kan synka ett projekt till Master.'},403);
    const masterProjectId=String(c.req.param('masterProjectId')),projectId=String(c.req.param('projectId'));
+
    stage='masterkontroll';
-   const master=await c.env.DB.prepare('SELECT id,version,status FROM master_projects WHERE id=?').bind(masterProjectId).first<any>();
+   const [master,snapshot,graphRow]=await Promise.all([
+    c.env.DB.prepare('SELECT id,version,status FROM master_projects WHERE id=?').bind(masterProjectId).first<any>(),
+    c.env.DB.prepare('SELECT master_project_id FROM project_master_snapshots WHERE project_id=?').bind(projectId).first<any>(),
+    c.env.DB.prepare('SELECT dependencies_json,positions_json,routes_json FROM project_graph_states WHERE project_id=?').bind(projectId).first<any>()
+   ]);
    if(!master)return c.json({ok:false,error:'Masterprojektet hittades inte.'},404);
    if(String(master.status)!=='active')return c.json({ok:false,error:'Endast ett aktivt masterprojekt kan synkas.'},409);
-   const snapshot=await c.env.DB.prepare('SELECT master_project_id FROM project_master_snapshots WHERE project_id=?').bind(projectId).first<any>();
    if(!snapshot)return c.json({ok:false,error:'Projektet saknar koppling till ett masterprojekt och kan inte användas som synkkälla.'},409);
    if(String(snapshot.master_project_id)!==masterProjectId)return c.json({ok:false,error:'Projektet är skapat från ett annat masterprojekt.'},409);
-   const graphRow=await c.env.DB.prepare('SELECT dependencies_json,positions_json,routes_json FROM project_graph_states WHERE project_id=?').bind(projectId).first<any>();
    if(!graphRow)return c.json({ok:false,error:'Projektet saknar sparad graph state. Öppna och spara Grafisk plan innan Master synkas.'},409);
 
    stage='läsa projektstruktur';
-   const [areaRows,sectionRows,taskRows,activityRows,linkRows]=await Promise.all([
+   const [areaRows,sectionRows,taskRows,activityRows,linkRows,masterAreaRows,masterSectionRows,masterTaskRows,masterActivityRows]=await Promise.all([
     c.env.DB.prepare('SELECT id,name,sort_order FROM work_areas WHERE project_id=? ORDER BY sort_order,id').bind(projectId).all(),
     c.env.DB.prepare(`SELECT s.id,s.work_area_id,s.name,s.sort_order FROM work_sections s JOIN work_areas a ON a.id=s.work_area_id WHERE a.project_id=? ORDER BY a.sort_order,s.sort_order,s.id`).bind(projectId).all(),
     c.env.DB.prepare(`SELECT t.id,t.work_section_id,t.title,t.description,t.sort_order FROM tasks t JOIN work_sections s ON s.id=t.work_section_id JOIN work_areas a ON a.id=s.work_area_id WHERE a.project_id=? ORDER BY a.sort_order,s.sort_order,t.sort_order,t.id`).bind(projectId).all(),
     c.env.DB.prepare(`SELECT a.id,a.task_id,a.title,a.description,a.activity_type,a.required,a.sort_order,COALESCE(ac.lifecycle_stage,'build') lifecycle_stage,COALESCE(ac.surface,'field') surface,COALESCE(ac.applicability,'always') applicability,COALESCE(ac.condition_text,'') condition_text FROM activities a JOIN tasks t ON t.id=a.task_id JOIN work_sections s ON s.id=t.work_section_id JOIN work_areas w ON w.id=s.work_area_id LEFT JOIN activity_contexts ac ON ac.activity_id=a.id WHERE w.project_id=? AND COALESCE(ac.applicability,'always')<>'deprecated' ORDER BY w.sort_order,s.sort_order,t.sort_order,a.sort_order,a.id`).bind(projectId).all(),
-    c.env.DB.prepare('SELECT id,entity_type,entity_id,master_entity_id FROM project_master_node_links WHERE project_id=?').bind(projectId).all()
+    c.env.DB.prepare('SELECT id,entity_type,entity_id,master_entity_id FROM project_master_node_links WHERE project_id=?').bind(projectId).all(),
+    c.env.DB.prepare('SELECT id FROM master_work_areas WHERE master_project_id=?').bind(masterProjectId).all(),
+    c.env.DB.prepare(`SELECT s.id FROM master_work_sections s JOIN master_work_areas a ON a.id=s.master_work_area_id WHERE a.master_project_id=?`).bind(masterProjectId).all(),
+    c.env.DB.prepare(`SELECT t.id FROM master_tasks t JOIN master_work_sections s ON s.id=t.master_work_section_id JOIN master_work_areas a ON a.id=s.master_work_area_id WHERE a.master_project_id=?`).bind(masterProjectId).all(),
+    c.env.DB.prepare(`SELECT ac.id FROM master_activities ac JOIN master_tasks t ON t.id=ac.master_task_id JOIN master_work_sections s ON s.id=t.master_work_section_id JOIN master_work_areas a ON a.id=s.master_work_area_id WHERE a.master_project_id=?`).bind(masterProjectId).all()
    ]);
+
    const areas=areaRows.results as any[],sections=sectionRows.results as any[],tasks=taskRows.results as any[],activities=activityRows.results as any[],links=linkRows.results as any[];
    const existing=new Map<string,string>();for(const row of links)existing.set(`${row.entity_type}:${row.entity_id}`,String(row.master_entity_id));
+   const masterIds={
+    work_area:new Set((masterAreaRows.results as any[]).map(r=>String(r.id))),
+    work_section:new Set((masterSectionRows.results as any[]).map(r=>String(r.id))),
+    task:new Set((masterTaskRows.results as any[]).map(r=>String(r.id))),
+    activity:new Set((masterActivityRows.results as any[]).map(r=>String(r.id)))
+   };
    const areaMap=new Map<string,string>(),sectionMap=new Map<string,string>(),taskMap=new Map<string,string>();
    let createdAreas=0,createdSections=0,createdTasks=0,createdActivities=0,deletedActivities=0,deletedTasks=0,deletedSections=0,deletedAreas=0;
 
    stage='synka arbetsområden';
+   const areaStatements:any[]=[];
    for(const source of areas){
-    let masterId=existing.get(`work_area:${source.id}`)||'';
-    if(masterId){const row=await c.env.DB.prepare('SELECT id FROM master_work_areas WHERE id=? AND master_project_id=?').bind(masterId,masterProjectId).first();if(!row)masterId=''}
-    if(!masterId){masterId=crypto.randomUUID();createdAreas++;await c.env.DB.prepare("INSERT INTO master_work_areas(id,master_project_id,number,name,sort_order) VALUES(?,?,'',?,?)").bind(masterId,masterProjectId,source.name,Number(source.sort_order||0)).run()}
-    else await c.env.DB.prepare('UPDATE master_work_areas SET name=?,sort_order=? WHERE id=?').bind(source.name,Number(source.sort_order||0),masterId).run();
-    areaMap.set(String(source.id),masterId);await link(c.env.DB,projectId,'work_area',String(source.id),masterId);
+    let masterId=existing.get(`work_area:${source.id}`)||'';if(!masterIds.work_area.has(masterId)){masterId=crypto.randomUUID();createdAreas++}
+    areaMap.set(String(source.id),masterId);
+    areaStatements.push(c.env.DB.prepare(`INSERT INTO master_work_areas(id,master_project_id,number,name,sort_order) VALUES(?,?,'',?,?) ON CONFLICT(id) DO UPDATE SET master_project_id=excluded.master_project_id,name=excluded.name,sort_order=excluded.sort_order`).bind(masterId,masterProjectId,source.name,Number(source.sort_order||0)));
+    areaStatements.push(linkStatement(c.env.DB,projectId,'work_area',String(source.id),masterId));
    }
+   await runBatchChunks(c.env.DB,areaStatements);
+
    stage='synka arbetsavsnitt';
+   const sectionStatements:any[]=[];
    for(const source of sections){
     const masterAreaId=areaMap.get(String(source.work_area_id));if(!masterAreaId)continue;
-    let masterId=existing.get(`work_section:${source.id}`)||'';
-    if(masterId){const row=await c.env.DB.prepare('SELECT id FROM master_work_sections WHERE id=?').bind(masterId).first();if(!row)masterId=''}
-    if(!masterId){masterId=crypto.randomUUID();createdSections++;await c.env.DB.prepare("INSERT INTO master_work_sections(id,master_work_area_id,number,name,sort_order) VALUES(?,?,'',?,?)").bind(masterId,masterAreaId,source.name,Number(source.sort_order||0)).run()}
-    else await c.env.DB.prepare('UPDATE master_work_sections SET master_work_area_id=?,name=?,sort_order=? WHERE id=?').bind(masterAreaId,source.name,Number(source.sort_order||0),masterId).run();
-    sectionMap.set(String(source.id),masterId);await link(c.env.DB,projectId,'work_section',String(source.id),masterId);
+    let masterId=existing.get(`work_section:${source.id}`)||'';if(!masterIds.work_section.has(masterId)){masterId=crypto.randomUUID();createdSections++}
+    sectionMap.set(String(source.id),masterId);
+    sectionStatements.push(c.env.DB.prepare(`INSERT INTO master_work_sections(id,master_work_area_id,number,name,sort_order) VALUES(?,?,'',?,?) ON CONFLICT(id) DO UPDATE SET master_work_area_id=excluded.master_work_area_id,name=excluded.name,sort_order=excluded.sort_order`).bind(masterId,masterAreaId,source.name,Number(source.sort_order||0)));
+    sectionStatements.push(linkStatement(c.env.DB,projectId,'work_section',String(source.id),masterId));
    }
+   await runBatchChunks(c.env.DB,sectionStatements);
+
    stage='synka moment';
+   const taskStatements:any[]=[];
    for(const source of tasks){
     const masterSectionId=sectionMap.get(String(source.work_section_id));if(!masterSectionId)continue;
-    let masterId=existing.get(`task:${source.id}`)||'';
-    if(masterId){const row=await c.env.DB.prepare('SELECT id FROM master_tasks WHERE id=?').bind(masterId).first();if(!row)masterId=''}
-    if(!masterId){masterId=crypto.randomUUID();createdTasks++;await c.env.DB.prepare('INSERT INTO master_tasks(id,master_work_section_id,title,description,sort_order) VALUES(?,?,?,?,?)').bind(masterId,masterSectionId,source.title,source.description||'',Number(source.sort_order||0)).run()}
-    else await c.env.DB.prepare('UPDATE master_tasks SET master_work_section_id=?,title=?,description=?,sort_order=? WHERE id=?').bind(masterSectionId,source.title,source.description||'',Number(source.sort_order||0),masterId).run();
-    taskMap.set(String(source.id),masterId);await link(c.env.DB,projectId,'task',String(source.id),masterId);
+    let masterId=existing.get(`task:${source.id}`)||'';if(!masterIds.task.has(masterId)){masterId=crypto.randomUUID();createdTasks++}
+    taskMap.set(String(source.id),masterId);
+    taskStatements.push(c.env.DB.prepare(`INSERT INTO master_tasks(id,master_work_section_id,title,description,sort_order) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET master_work_section_id=excluded.master_work_section_id,title=excluded.title,description=excluded.description,sort_order=excluded.sort_order`).bind(masterId,masterSectionId,source.title,source.description||'',Number(source.sort_order||0)));
+    taskStatements.push(linkStatement(c.env.DB,projectId,'task',String(source.id),masterId));
    }
+   await runBatchChunks(c.env.DB,taskStatements);
+
    stage='synka aktiviteter';
+   const activityStatements:any[]=[];
    for(const source of activities){
     const masterTaskId=taskMap.get(String(source.task_id));if(!masterTaskId)continue;
-    let masterId=existing.get(`activity:${source.id}`)||'';
-    if(masterId){const row=await c.env.DB.prepare('SELECT id FROM master_activities WHERE id=?').bind(masterId).first();if(!row)masterId=''}
-    if(!masterId){masterId=crypto.randomUUID();createdActivities++;await c.env.DB.prepare('INSERT INTO master_activities(id,master_task_id,title,description,activity_type,required,sort_order) VALUES(?,?,?,?,?,?,?)').bind(masterId,masterTaskId,source.title,source.description||'',source.activity_type||'perform',Number(source.required??1),Number(source.sort_order||0)).run()}
-    else await c.env.DB.prepare('UPDATE master_activities SET master_task_id=?,title=?,description=?,activity_type=?,required=?,sort_order=? WHERE id=?').bind(masterTaskId,source.title,source.description||'',source.activity_type||'perform',Number(source.required??1),Number(source.sort_order||0),masterId).run();
-    await c.env.DB.prepare(`INSERT INTO master_activity_contexts(master_activity_id,lifecycle_stage,surface,applicability,condition_text,updated_at) VALUES(?,?,?,?,?,datetime('now')) ON CONFLICT(master_activity_id) DO UPDATE SET lifecycle_stage=excluded.lifecycle_stage,surface=excluded.surface,applicability=excluded.applicability,condition_text=excluded.condition_text,updated_at=datetime('now')`).bind(masterId,source.lifecycle_stage,source.surface,source.applicability||'always',source.condition_text||'').run();
-    await link(c.env.DB,projectId,'activity',String(source.id),masterId);
+    let masterId=existing.get(`activity:${source.id}`)||'';if(!masterIds.activity.has(masterId)){masterId=crypto.randomUUID();createdActivities++}
+    activityStatements.push(c.env.DB.prepare(`INSERT INTO master_activities(id,master_task_id,title,description,activity_type,required,sort_order) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET master_task_id=excluded.master_task_id,title=excluded.title,description=excluded.description,activity_type=excluded.activity_type,required=excluded.required,sort_order=excluded.sort_order`).bind(masterId,masterTaskId,source.title,source.description||'',source.activity_type||'perform',Number(source.required??1),Number(source.sort_order||0)));
+    activityStatements.push(c.env.DB.prepare(`INSERT INTO master_activity_contexts(master_activity_id,lifecycle_stage,surface,applicability,condition_text,updated_at) VALUES(?,?,?,?,?,datetime('now')) ON CONFLICT(master_activity_id) DO UPDATE SET lifecycle_stage=excluded.lifecycle_stage,surface=excluded.surface,applicability=excluded.applicability,condition_text=excluded.condition_text,updated_at=datetime('now')`).bind(masterId,source.lifecycle_stage,source.surface,source.applicability||'always',source.condition_text||''));
+    activityStatements.push(linkStatement(c.env.DB,projectId,'activity',String(source.id),masterId));
    }
+   await runBatchChunks(c.env.DB,activityStatements);
 
    stage='rensa borttagna masterposter';
    const currentIds={work_area:new Set(areas.map(x=>String(x.id))),work_section:new Set(sections.map(x=>String(x.id))),task:new Set(tasks.map(x=>String(x.id))),activity:new Set(activities.map(x=>String(x.id)))};
-   for(const row of links.filter(x=>String(x.entity_type)==='activity'))if(!currentIds.activity.has(String(row.entity_id))){await c.env.DB.prepare('DELETE FROM master_activity_contexts WHERE master_activity_id=?').bind(row.master_entity_id).run();await c.env.DB.prepare('DELETE FROM master_activities WHERE id=?').bind(row.master_entity_id).run();await c.env.DB.prepare('DELETE FROM project_master_node_links WHERE id=?').bind(row.id).run();deletedActivities++}
-   for(const row of links.filter(x=>String(x.entity_type)==='task'))if(!currentIds.task.has(String(row.entity_id))){const activityIds=await c.env.DB.prepare('SELECT id FROM master_activities WHERE master_task_id=?').bind(row.master_entity_id).all();for(const a of activityIds.results as any[])await c.env.DB.prepare('DELETE FROM master_activity_contexts WHERE master_activity_id=?').bind(a.id).run();await c.env.DB.prepare('DELETE FROM master_activities WHERE master_task_id=?').bind(row.master_entity_id).run();try{await c.env.DB.prepare('DELETE FROM master_task_modules WHERE master_task_id=?').bind(row.master_entity_id).run()}catch{}await c.env.DB.prepare('DELETE FROM master_tasks WHERE id=?').bind(row.master_entity_id).run();await c.env.DB.prepare('DELETE FROM project_master_node_links WHERE id=?').bind(row.id).run();deletedTasks++}
-   for(const row of links.filter(x=>String(x.entity_type)==='work_section'))if(!currentIds.work_section.has(String(row.entity_id))){const child=await c.env.DB.prepare('SELECT COUNT(*) count FROM master_tasks WHERE master_work_section_id=?').bind(row.master_entity_id).first<any>();if(Number(child?.count||0)===0){await c.env.DB.prepare('DELETE FROM master_work_sections WHERE id=?').bind(row.master_entity_id).run();deletedSections++}await c.env.DB.prepare('DELETE FROM project_master_node_links WHERE id=?').bind(row.id).run()}
-   for(const row of links.filter(x=>String(x.entity_type)==='work_area'))if(!currentIds.work_area.has(String(row.entity_id))){const child=await c.env.DB.prepare('SELECT COUNT(*) count FROM master_work_sections WHERE master_work_area_id=?').bind(row.master_entity_id).first<any>();if(Number(child?.count||0)===0){await c.env.DB.prepare('DELETE FROM master_work_areas WHERE id=?').bind(row.master_entity_id).run();deletedAreas++}await c.env.DB.prepare('DELETE FROM project_master_node_links WHERE id=?').bind(row.id).run()}
+   const cleanupStatements:any[]=[];
+   for(const row of links.filter(x=>String(x.entity_type)==='activity'))if(!currentIds.activity.has(String(row.entity_id))){cleanupStatements.push(c.env.DB.prepare('DELETE FROM master_activity_contexts WHERE master_activity_id=?').bind(row.master_entity_id),c.env.DB.prepare('DELETE FROM master_activities WHERE id=?').bind(row.master_entity_id),c.env.DB.prepare('DELETE FROM project_master_node_links WHERE id=?').bind(row.id));deletedActivities++}
+   for(const row of links.filter(x=>String(x.entity_type)==='task'))if(!currentIds.task.has(String(row.entity_id))){cleanupStatements.push(c.env.DB.prepare('DELETE FROM master_activity_contexts WHERE master_activity_id IN (SELECT id FROM master_activities WHERE master_task_id=?)').bind(row.master_entity_id),c.env.DB.prepare('DELETE FROM master_activities WHERE master_task_id=?').bind(row.master_entity_id),c.env.DB.prepare('DELETE FROM master_task_modules WHERE master_task_id=?').bind(row.master_entity_id),c.env.DB.prepare('DELETE FROM master_tasks WHERE id=?').bind(row.master_entity_id),c.env.DB.prepare('DELETE FROM project_master_node_links WHERE id=?').bind(row.id));deletedTasks++}
+   for(const row of links.filter(x=>String(x.entity_type)==='work_section'))if(!currentIds.work_section.has(String(row.entity_id))){cleanupStatements.push(c.env.DB.prepare('DELETE FROM master_work_sections WHERE id=? AND NOT EXISTS (SELECT 1 FROM master_tasks WHERE master_work_section_id=?)').bind(row.master_entity_id,row.master_entity_id),c.env.DB.prepare('DELETE FROM project_master_node_links WHERE id=?').bind(row.id));deletedSections++}
+   for(const row of links.filter(x=>String(x.entity_type)==='work_area'))if(!currentIds.work_area.has(String(row.entity_id))){cleanupStatements.push(c.env.DB.prepare('DELETE FROM master_work_areas WHERE id=? AND NOT EXISTS (SELECT 1 FROM master_work_sections WHERE master_work_area_id=?)').bind(row.master_entity_id,row.master_entity_id),c.env.DB.prepare('DELETE FROM project_master_node_links WHERE id=?').bind(row.id));deletedAreas++}
+   await runBatchChunks(c.env.DB,cleanupStatements);
 
    stage='spara mastergraf';
    const masterGraph=remapGraph(graphRow,taskMap);
-   await c.env.DB.prepare(`INSERT INTO master_graph_states(master_project_id,dependencies_json,positions_json,routes_json,updated_at) VALUES(?,?,?,?,datetime('now')) ON CONFLICT(master_project_id) DO UPDATE SET dependencies_json=excluded.dependencies_json,positions_json=excluded.positions_json,routes_json=excluded.routes_json,updated_at=datetime('now')`).bind(masterProjectId,JSON.stringify(masterGraph.dependencies),JSON.stringify(masterGraph.positions),JSON.stringify(masterGraph.routes)).run();
+   await c.env.DB.batch([
+    c.env.DB.prepare(`INSERT INTO master_graph_states(master_project_id,dependencies_json,positions_json,routes_json,updated_at) VALUES(?,?,?,?,datetime('now')) ON CONFLICT(master_project_id) DO UPDATE SET dependencies_json=excluded.dependencies_json,positions_json=excluded.positions_json,routes_json=excluded.routes_json,updated_at=datetime('now')`).bind(masterProjectId,JSON.stringify(masterGraph.dependencies),JSON.stringify(masterGraph.positions),JSON.stringify(masterGraph.routes)),
+    c.env.DB.prepare("UPDATE master_projects SET version=version+1,updated_at=datetime('now') WHERE id=?").bind(masterProjectId)
+   ]);
    stage='uppdatera masterversion';
-   await c.env.DB.prepare("UPDATE master_projects SET version=version+1,updated_at=datetime('now') WHERE id=?").bind(masterProjectId).run();
    const updated=await c.env.DB.prepare('SELECT version FROM master_projects WHERE id=?').bind(masterProjectId).first<any>();
    await c.env.DB.prepare('UPDATE project_master_snapshots SET master_project_version=? WHERE project_id=?').bind(Number(updated?.version||master.version),projectId).run();
+
    return c.json({ok:true,masterProjectId,projectId,version:Number(updated?.version||master.version),graphSynced:true,created:{areas:createdAreas,sections:createdSections,tasks:createdTasks,activities:createdActivities},deleted:{areas:deletedAreas,sections:deletedSections,tasks:deletedTasks,activities:deletedActivities},counts:{areas:areas.length,sections:sections.length,tasks:tasks.length,activities:activities.length}});
   }catch(error){
-   const detail=errorDetail(error);console.error('Master project sync failed',{stage,detail,error});
+   const detail=errorDetail(error);console.error(`Master project sync failed at ${stage}`,error);
    return c.json({ok:false,error:`Synkningen avbröts i steget ”${stage}”: ${detail}`,stage,detail},500);
   }
  });
