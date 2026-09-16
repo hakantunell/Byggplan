@@ -1,3 +1,6 @@
+import {sessionUser} from './auth-session';
+import {isSystemAdmin} from './workspace-access';
+
 type RouteApp={post:(path:string,handler:(c:any)=>unknown)=>void};
 
 type GraphState={dependencies:Record<string,string[]>;positions:Record<string,unknown>;routes:Record<string,unknown>};
@@ -36,8 +39,10 @@ function remapGraph(row:any,taskMap:Map<string,string>):GraphState{
 export function registerMasterProjectSyncRoutes(app:RouteApp){
  app.post('/api/studio/master-projects/:masterProjectId/sync-from-project/:projectId',async c=>{
   await ensureSchema(c.env.DB);
+  const user=await sessionUser(c);if(!user)return c.json({ok:false,error:'Du måste vara inloggad.'},401);
+  if(!await isSystemAdmin(c.env.DB,user))return c.json({ok:false,error:'Endast systemadministratör kan synka ett projekt till Master.'},403);
   const masterProjectId=String(c.req.param('masterProjectId')),projectId=String(c.req.param('projectId'));
-  const master=await c.env.DB.prepare('SELECT id,code,version,status FROM master_projects WHERE id=?').bind(masterProjectId).first<any>();
+  const master=await c.env.DB.prepare('SELECT id,version,status FROM master_projects WHERE id=?').bind(masterProjectId).first<any>();
   if(!master)return c.json({ok:false,error:'Masterprojektet hittades inte.'},404);
   if(String(master.status)!=='active')return c.json({ok:false,error:'Endast ett aktivt masterprojekt kan synkas.'},409);
   const snapshot=await c.env.DB.prepare('SELECT master_project_id FROM project_master_snapshots WHERE project_id=?').bind(projectId).first<any>();
@@ -55,7 +60,7 @@ export function registerMasterProjectSyncRoutes(app:RouteApp){
   ]);
   const areas=areaRows.results as any[],sections=sectionRows.results as any[],tasks=taskRows.results as any[],activities=activityRows.results as any[],links=linkRows.results as any[];
   const existing=new Map<string,string>();for(const row of links)existing.set(`${row.entity_type}:${row.entity_id}`,String(row.master_entity_id));
-  const areaMap=new Map<string,string>(),sectionMap=new Map<string,string>(),taskMap=new Map<string,string>(),activityMap=new Map<string,string>();
+  const areaMap=new Map<string,string>(),sectionMap=new Map<string,string>(),taskMap=new Map<string,string>();
   let createdAreas=0,createdSections=0,createdTasks=0,createdActivities=0,deletedActivities=0,deletedTasks=0,deletedSections=0,deletedAreas=0;
 
   for(const source of areas){
@@ -88,7 +93,7 @@ export function registerMasterProjectSyncRoutes(app:RouteApp){
    if(!masterId){masterId=crypto.randomUUID();createdActivities++;await c.env.DB.prepare('INSERT INTO master_activities(id,master_task_id,title,description,activity_type,required,sort_order) VALUES(?,?,?,?,?,?,?)').bind(masterId,masterTaskId,source.title,source.description||'',source.activity_type||'perform',Number(source.required??1),Number(source.sort_order||0)).run()}
    else await c.env.DB.prepare('UPDATE master_activities SET master_task_id=?,title=?,description=?,activity_type=?,required=?,sort_order=? WHERE id=?').bind(masterTaskId,source.title,source.description||'',source.activity_type||'perform',Number(source.required??1),Number(source.sort_order||0),masterId).run();
    await c.env.DB.prepare(`INSERT INTO master_activity_contexts(master_activity_id,lifecycle_stage,surface,applicability,condition_text,updated_at) VALUES(?,?,?,?,?,datetime('now')) ON CONFLICT(master_activity_id) DO UPDATE SET lifecycle_stage=excluded.lifecycle_stage,surface=excluded.surface,applicability=excluded.applicability,condition_text=excluded.condition_text,updated_at=datetime('now')`).bind(masterId,source.lifecycle_stage,source.surface,'always',source.condition_text||'').run();
-   activityMap.set(String(source.id),masterId);await link(c.env.DB,projectId,'activity',String(source.id),masterId);
+   await link(c.env.DB,projectId,'activity',String(source.id),masterId);
   }
 
   const currentIds={work_area:new Set(areas.map(x=>String(x.id))),work_section:new Set(sections.map(x=>String(x.id))),task:new Set(tasks.map(x=>String(x.id))),activity:new Set(activities.map(x=>String(x.id)))};
