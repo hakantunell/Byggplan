@@ -2,8 +2,9 @@ import {sessionUser} from './auth-session';
 import {isSystemAdmin} from './workspace-access';
 
 type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void;post:(path:string,handler:(c:any)=>unknown)=>void};
-type AuditKind='current'|'stale_selected_module'|'unselected_module'|'stale_base';
-type AuditTask={id:string;title:string;description:string;areaId:string;areaName:string;sectionId:string;sectionName:string;moduleCode:string;moduleName:string;activityCount:number;linkedToSource:boolean;kind:AuditKind;cleanupCandidate:boolean;sameTitleProjectTask:{id:string;title:string}|null};
+type AuditKind='current'|'confirmed_duplicate'|'module_review'|'stale_base';
+type ProjectTaskRef={id:string;title:string;masterEntityId:string};
+type AuditTask={id:string;title:string;description:string;areaId:string;areaName:string;sectionId:string;sectionName:string;moduleCode:string;moduleName:string;activityCount:number;linkedToSource:boolean;kind:AuditKind;cleanupCandidate:boolean;sameTitleProjectTask:ProjectTaskRef|null};
 
 function norm(value:unknown){return String(value||'').trim().toLocaleLowerCase('sv-SE').replace(/\s+/g,' ')}
 async function authorize(c:any){const user=await sessionUser(c);if(!user)return{response:c.json({ok:false,error:'Du måste vara inloggad.'},401)};if(!await isSystemAdmin(c.env.DB,user))return{response:c.json({ok:false,error:'Endast systemadministratör kan analysera eller städa Masterprojekt.'},403)};return{user}}
@@ -21,17 +22,19 @@ async function audit(db:D1Database,masterProjectId:string,projectId:string){
 
  let selectedModuleCodes:string[]=[];
  if(await tableExists(db,'project_master_module_selections')){const rows=await db.prepare('SELECT module_code FROM project_master_module_selections WHERE project_id=? ORDER BY module_code').bind(projectId).all();selectedModuleCodes=(rows.results as any[]).map(r=>String(r.module_code))}
- const selected=new Set(selectedModuleCodes);
- const projectRows=await db.prepare(`SELECT t.id,t.title FROM tasks t JOIN work_sections s ON s.id=t.work_section_id JOIN work_areas a ON a.id=s.work_area_id WHERE a.project_id=? ORDER BY a.sort_order,s.sort_order,t.sort_order,t.id`).bind(projectId).all();
- const projectByTitle=new Map<string,{id:string;title:string}>();for(const row of projectRows.results as any[]){const k=norm(row.title);if(k&&!projectByTitle.has(k))projectByTitle.set(k,{id:String(row.id),title:String(row.title)})}
+ const projectRows=await db.prepare(`SELECT t.id,t.title,COALESCE(l.master_entity_id,'') master_entity_id FROM tasks t JOIN work_sections s ON s.id=t.work_section_id JOIN work_areas a ON a.id=s.work_area_id LEFT JOIN project_master_node_links l ON l.project_id=? AND l.entity_type='task' AND l.entity_id=t.id WHERE a.project_id=? ORDER BY a.sort_order,s.sort_order,t.sort_order,t.id`).bind(projectId,projectId).all();
+ const projectByTitle=new Map<string,ProjectTaskRef>();
+ for(const row of projectRows.results as any[]){const k=norm(row.title);if(!k)continue;const next={id:String(row.id),title:String(row.title),masterEntityId:String(row.master_entity_id||'')},current=projectByTitle.get(k);if(!current||(!current.masterEntityId&&next.masterEntityId))projectByTitle.set(k,next)}
  const masterRows=await db.prepare(`SELECT t.id,t.title,t.description,s.id section_id,s.name section_name,a.id area_id,a.name area_name,COALESCE(mm.code,'') module_code,COALESCE(mm.name,'') module_name,(SELECT COUNT(*) FROM master_activities ma WHERE ma.master_task_id=t.id) activity_count,CASE WHEN EXISTS(SELECT 1 FROM project_master_node_links l WHERE l.project_id=? AND l.entity_type='task' AND l.master_entity_id=t.id) THEN 1 ELSE 0 END linked_to_source FROM master_tasks t JOIN master_work_sections s ON s.id=t.master_work_section_id JOIN master_work_areas a ON a.id=s.master_work_area_id LEFT JOIN master_task_modules mtm ON mtm.master_task_id=t.id LEFT JOIN master_modules mm ON mm.id=mtm.module_id WHERE a.master_project_id=? ORDER BY a.sort_order,s.sort_order,t.sort_order,t.id`).bind(projectId,masterProjectId).all();
  const tasks:AuditTask[]=(masterRows.results as any[]).map(row=>{
-  const linkedToSource=Number(row.linked_to_source)===1,moduleCode=String(row.module_code||'');let kind:AuditKind;
-  if(linkedToSource)kind='current';else if(moduleCode&&selected.has(moduleCode))kind='stale_selected_module';else if(moduleCode)kind='unselected_module';else kind='stale_base';
-  return{id:String(row.id),title:String(row.title||''),description:String(row.description||''),areaId:String(row.area_id),areaName:String(row.area_name||''),sectionId:String(row.section_id),sectionName:String(row.section_name||''),moduleCode,moduleName:String(row.module_name||''),activityCount:Number(row.activity_count||0),linkedToSource,kind,cleanupCandidate:kind==='stale_selected_module'||kind==='stale_base',sameTitleProjectTask:projectByTitle.get(norm(row.title))||null};
+  const id=String(row.id),linkedToSource=Number(row.linked_to_source)===1,moduleCode=String(row.module_code||''),sameTitleProjectTask=projectByTitle.get(norm(row.title))||null;
+  const representedByOther=Boolean(!linkedToSource&&sameTitleProjectTask?.masterEntityId&&sameTitleProjectTask.masterEntityId!==id);
+  let kind:AuditKind;
+  if(linkedToSource)kind='current';else if(representedByOther)kind='confirmed_duplicate';else if(moduleCode)kind='module_review';else kind='stale_base';
+  return{id,title:String(row.title||''),description:String(row.description||''),areaId:String(row.area_id),areaName:String(row.area_name||''),sectionId:String(row.section_id),sectionName:String(row.section_name||''),moduleCode,moduleName:String(row.module_name||''),activityCount:Number(row.activity_count||0),linkedToSource,kind,cleanupCandidate:kind==='confirmed_duplicate'||kind==='stale_base',sameTitleProjectTask};
  });
  const count=(kind:AuditKind)=>tasks.filter(t=>t.kind===kind).length;
- return{status:200,data:{ok:true,master:{id:String(master.id),code:String(master.code||''),name:String(master.name||''),version:Number(master.version||0)},sourceProject:{id:projectId,snapshotVersion:Number(snapshot.master_project_version||0),selectedModuleCodes},summary:{total:tasks.length,current:count('current'),staleSelectedModule:count('stale_selected_module'),unselectedModule:count('unselected_module'),staleBase:count('stale_base'),cleanupCandidates:tasks.filter(t=>t.cleanupCandidate).length},tasks}} as const;
+ return{status:200,data:{ok:true,master:{id:String(master.id),code:String(master.code||''),name:String(master.name||''),version:Number(master.version||0)},sourceProject:{id:projectId,snapshotVersion:Number(snapshot.master_project_version||0),selectedModuleCodes},summary:{total:tasks.length,current:count('current'),confirmedDuplicates:count('confirmed_duplicate'),moduleReview:count('module_review'),staleBase:count('stale_base'),cleanupCandidates:tasks.filter(t=>t.cleanupCandidate).length},tasks}} as const;
 }
 
 export function registerMasterProjectAuditRoutes(app:RouteApp){
