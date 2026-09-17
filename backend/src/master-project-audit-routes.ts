@@ -6,6 +6,11 @@ type AuditKind='current'|'confirmed_duplicate'|'module_review'|'stale_base';
 type ProjectTaskRef={id:string;title:string;masterEntityId:string};
 type AuditTask={id:string;title:string;description:string;areaId:string;areaName:string;sectionId:string;sectionName:string;moduleCode:string;moduleName:string;activityCount:number;linkedToSource:boolean;kind:AuditKind;cleanupCandidate:boolean;sameTitleProjectTask:ProjectTaskRef|null};
 
+const LEGACY_REPLACEMENTS=new Map<string,string>([
+ ['log|utför timmerstomme','res bärande stomme'],
+ ['purlin|bygg åstak','bygg åstak och bärande takkonstruktion']
+]);
+
 function norm(value:unknown){return String(value||'').trim().toLocaleLowerCase('sv-SE').replace(/\s+/g,' ')}
 async function authorize(c:any){const user=await sessionUser(c);if(!user)return{response:c.json({ok:false,error:'Du måste vara inloggad.'},401)};if(!await isSystemAdmin(c.env.DB,user))return{response:c.json({ok:false,error:'Endast systemadministratör kan analysera eller städa Masterprojekt.'},403)};return{user}}
 async function tableExists(db:D1Database,name:string){return Boolean(await db.prepare("SELECT 1 ok FROM sqlite_master WHERE type='table' AND name=?").bind(name).first())}
@@ -27,11 +32,13 @@ async function audit(db:D1Database,masterProjectId:string,projectId:string){
  for(const row of projectRows.results as any[]){const k=norm(row.title);if(!k)continue;const next={id:String(row.id),title:String(row.title),masterEntityId:String(row.master_entity_id||'')},current=projectByTitle.get(k);if(!current||(!current.masterEntityId&&next.masterEntityId))projectByTitle.set(k,next)}
  const masterRows=await db.prepare(`SELECT t.id,t.title,t.description,s.id section_id,s.name section_name,a.id area_id,a.name area_name,COALESCE(mm.code,'') module_code,COALESCE(mm.name,'') module_name,(SELECT COUNT(*) FROM master_activities ma WHERE ma.master_task_id=t.id) activity_count,CASE WHEN EXISTS(SELECT 1 FROM project_master_node_links l WHERE l.project_id=? AND l.entity_type='task' AND l.master_entity_id=t.id) THEN 1 ELSE 0 END linked_to_source FROM master_tasks t JOIN master_work_sections s ON s.id=t.master_work_section_id JOIN master_work_areas a ON a.id=s.master_work_area_id LEFT JOIN master_task_modules mtm ON mtm.master_task_id=t.id LEFT JOIN master_modules mm ON mm.id=mtm.module_id WHERE a.master_project_id=? ORDER BY a.sort_order,s.sort_order,t.sort_order,t.id`).bind(projectId,masterProjectId).all();
  const tasks:AuditTask[]=(masterRows.results as any[]).map(row=>{
-  const id=String(row.id),linkedToSource=Number(row.linked_to_source)===1,moduleCode=String(row.module_code||''),sameTitleProjectTask=projectByTitle.get(norm(row.title))||null;
-  const representedByOther=Boolean(!linkedToSource&&sameTitleProjectTask?.masterEntityId&&sameTitleProjectTask.masterEntityId!==id);
+  const id=String(row.id),linkedToSource=Number(row.linked_to_source)===1,moduleCode=String(row.module_code||''),title=String(row.title||'');
+  const legacyReplacementTitle=LEGACY_REPLACEMENTS.get(`${moduleCode}|${norm(title)}`)||'';
+  const sameTitleProjectTask=projectByTitle.get(norm(title))||null,replacementProjectTask=legacyReplacementTitle?projectByTitle.get(legacyReplacementTitle)||null:null,matchingProjectTask=sameTitleProjectTask||replacementProjectTask;
+  const representedByOther=Boolean(!linkedToSource&&matchingProjectTask?.masterEntityId&&matchingProjectTask.masterEntityId!==id);
   let kind:AuditKind;
   if(linkedToSource)kind='current';else if(representedByOther)kind='confirmed_duplicate';else if(moduleCode)kind='module_review';else kind='stale_base';
-  return{id,title:String(row.title||''),description:String(row.description||''),areaId:String(row.area_id),areaName:String(row.area_name||''),sectionId:String(row.section_id),sectionName:String(row.section_name||''),moduleCode,moduleName:String(row.module_name||''),activityCount:Number(row.activity_count||0),linkedToSource,kind,cleanupCandidate:kind==='confirmed_duplicate'||kind==='stale_base',sameTitleProjectTask};
+  return{id,title,description:String(row.description||''),areaId:String(row.area_id),areaName:String(row.area_name||''),sectionId:String(row.section_id),sectionName:String(row.section_name||''),moduleCode,moduleName:String(row.module_name||''),activityCount:Number(row.activity_count||0),linkedToSource,kind,cleanupCandidate:kind==='confirmed_duplicate'||kind==='stale_base',sameTitleProjectTask:matchingProjectTask};
  });
  const count=(kind:AuditKind)=>tasks.filter(t=>t.kind===kind).length;
  return{status:200,data:{ok:true,master:{id:String(master.id),code:String(master.code||''),name:String(master.name||''),version:Number(master.version||0)},sourceProject:{id:projectId,snapshotVersion:Number(snapshot.master_project_version||0),selectedModuleCodes},summary:{total:tasks.length,current:count('current'),confirmedDuplicates:count('confirmed_duplicate'),moduleReview:count('module_review'),staleBase:count('stale_base'),cleanupCandidates:tasks.filter(t=>t.cleanupCandidate).length},tasks}} as const;
