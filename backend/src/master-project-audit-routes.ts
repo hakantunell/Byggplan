@@ -8,7 +8,9 @@ type AuditTask={id:string;title:string;description:string;areaId:string;areaName
 
 const LEGACY_REPLACEMENTS=new Map<string,string>([
  ['log|utför timmerstomme','res bärande stomme'],
- ['purlin|bygg åstak','bygg åstak och bärande takkonstruktion']
+ ['purlin|bygg åstak','bygg åstak och bärande takkonstruktion'],
+ ['municipal_water|anslut kommunalt vatten','förlägg och anslut servisledning för vatten'],
+ ['shared_water|anslut gemensamt vatten','förlägg och anslut servisledning för vatten']
 ]);
 
 function norm(value:unknown){return String(value||'').trim().toLocaleLowerCase('sv-SE').replace(/\s+/g,' ')}
