@@ -1,5 +1,9 @@
 type RouteApp={get:(path:string,handler:(c:any)=>unknown)=>void;post:(path:string,handler:(c:any)=>unknown)=>void};
-type A={title:string;type:string;description?:string};type T={title:string;description?:string;activities:A[];module?:string};type S={number:string;name:string;tasks:T[]};type W={number:string;name:string;sections:S[]};
+type A={title:string;type:string;description?:string};
+type T={title:string;description?:string;activities:A[];module?:string};
+type S={number:string;name:string;tasks:T[]};
+type W={number:string;name:string;sections:S[]};
+
 const MODULES=[
  {groupCode:'foundation',groupName:'Grundlösning',selectionMode:'multi',code:'crawlspace',name:'Krypgrund',description:'Ventilerad eller annan krypgrund.'},
  {groupCode:'foundation',groupName:'Grundlösning',selectionMode:'multi',code:'slab',name:'Platta på mark',description:'Isolerad betongplatta på mark.'},
@@ -22,6 +26,7 @@ const MODULES=[
  {groupCode:'features',groupName:'Tillval',selectionMode:'multi',code:'wetroom',name:'Våtrum',description:'Våtrum med tätskikt och golvbrunn.'},
  {groupCode:'features',groupName:'Tillval',selectionMode:'multi',code:'fireplace',name:'Eldstad och skorsten',description:'Eldstad med rökkanal/skorsten.'}
 ] as const;
+
 const BASE:W[]=[
  {number:'10',name:'Projektstart och etablering',sections:[{number:'10.10',name:'Startförutsättningar',tasks:[{title:'Förbered byggstart',activities:[{title:'Kontrollera gällande lov, startbesked och projekthandlingar',type:'check'},{title:'Kontrollera att arbetsmiljöorganisation och arbetsmiljöplan är ordnade',type:'check'},{title:'Kontrollera utsättning, referenshöjd och kända ledningar',type:'check'}]}]},{number:'10.20',name:'Etablering',tasks:[{title:'Etablera byggarbetsplats',activities:[{title:'Ordna åtkomst, arbetsytor och materialupplag',type:'perform'},{title:'Ordna säker avfallshantering och sortering',type:'perform'},{title:'Dokumentera utgångsläget före markarbete',type:'document'}]}]}]},
  {number:'20',name:'Mark och grund',sections:[{number:'20.10',name:'Markarbete',tasks:[{title:'Förbered och schakta byggyta',activities:[{title:'Kontrollera situationsplan och projekterade nivåer',type:'check'},{title:'Schakta till projekterad nivå',type:'perform'},{title:'Kontrollera grundbotten och avvikande markförhållanden',type:'check'},{title:'Dokumentera grundbotten före fortsatt arbete',type:'document'}]},{title:'Färdigställ undergrund',activities:[{title:'Utför dränerande och kapillärbrytande lager enligt projektering',type:'perform'},{title:'Packa och kontrollera nivåer',type:'measurement'}]}]},{number:'20.20',name:'Grundkonstruktion',tasks:[{title:'Bygg och kontrollera grund',activities:[{title:'Kontrollera grundens mått, nivåer och genomföringar före gjutning eller montage',type:'check'},{title:'Utför vald grundkonstruktion',type:'perform'},{title:'Kontrollera färdig grund före stomstart',type:'check'},{title:'Dokumentera dolda delar före återfyllning eller igenbyggnad',type:'document'}]}]},{number:'20.30',name:'Markåterställning',tasks:[{title:'Återfyll och färdigställ mark',activities:[{title:'Utför erforderlig dränering och återfyllning',type:'perform'},{title:'Forma slutliga marknivåer och markfall',type:'perform'},{title:'Kontrollera dagvattenavledning från byggnaden',type:'check'}]}]}]},
@@ -32,6 +37,7 @@ const BASE:W[]=[
  {number:'70',name:'Invändiga arbeten',sections:[{number:'70.10',name:'Invändig komplettering',tasks:[{title:'Färdigställ invändiga konstruktioner',activities:[{title:'Utför innerväggar och invändiga kompletteringar',type:'perform'},{title:'Kontrollera installationer innan konstruktioner byggs igen',type:'check'},{title:'Färdigställ invändiga ytskikt och fast inredning',type:'perform'}]}]}]},
  {number:'80',name:'Säkerhet och färdigställande',sections:[{number:'80.10',name:'Säkerhet',tasks:[{title:'Kontrollera säkerhet vid användning',activities:[{title:'Kontrollera fall-, glas-, barn- och tippsäkerhet där det är tillämpligt',type:'check'},{title:'Kontrollera räcken, skydd och andra personsäkerhetsdetaljer',type:'check'}]}]},{number:'80.20',name:'Slutkontroll',tasks:[{title:'Samla slutdokumentation',activities:[{title:'Kontrollera att egenkontroller och obligatorisk dokumentation är kompletta',type:'check'},{title:'Samla intyg, protokoll och relationshandlingar',type:'document'},{title:'Kontrollera färdig byggnad mot lov och projekthandlingar',type:'check'}]},{title:'Avsluta projektet',activities:[{title:'Förbered underlag för slutsamråd eller slutbesked',type:'document'},{title:'Hantera eventuella kompletteringar',type:'perform'},{title:'Registrera slutbesked när det har erhållits',type:'document'}]}]}]}
 ];
+
 const EXTRA:T[]=[
  {module:'crawlspace',title:'Utför krypgrund',activities:[{title:'Bygg krypgrund enligt projektering',type:'perform'},{title:'Kontrollera ventilation, markskydd och fuktskydd',type:'check'}]},
  {module:'slab',title:'Utför platta på mark',activities:[{title:'Montera isolering, installationer och armering för platta',type:'perform'},{title:'Kontrollera före gjutning',type:'check'},{title:'Gjut platta',type:'perform'}]},
@@ -52,12 +58,82 @@ const EXTRA:T[]=[
  {module:'wetroom',title:'Utför våtrum',activities:[{title:'Förbered golv, golvbrunn och fall',type:'perform'},{title:'Kontrollera fall och underlag före tätskikt',type:'measurement'},{title:'Utför tätskikt enligt valt system',type:'perform'},{title:'Dokumentera tätskikt före ytskikt',type:'document'},{title:'Samla våtrumsdokumentation/intyg',type:'document'}]},
  {module:'fireplace',title:'Installera eldstad och rökkanal',activities:[{title:'Installera eldstad och rökkanal enligt produkt- och brandskyddskrav',type:'perform'},{title:'Utför erforderlig taksäkerhet och tillträdesanordningar',type:'perform'},{title:'Beställ och genomför föreskriven sotarbesiktning',type:'approval'},{title:'Spara godkänt protokoll',type:'document'}]}
 ];
-async function schema(db:D1Database){await db.prepare(`CREATE TABLE IF NOT EXISTS master_modules(id TEXT PRIMARY KEY,master_project_id TEXT NOT NULL,group_code TEXT NOT NULL,group_name TEXT NOT NULL,selection_mode TEXT NOT NULL DEFAULT 'single',code TEXT NOT NULL,name TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',sort_order INTEGER NOT NULL DEFAULT 0,UNIQUE(master_project_id,code),FOREIGN KEY(master_project_id) REFERENCES master_projects(id) ON DELETE CASCADE)`).run();await db.prepare(`CREATE TABLE IF NOT EXISTS master_task_modules(master_task_id TEXT PRIMARY KEY,module_id TEXT NOT NULL,FOREIGN KEY(master_task_id) REFERENCES master_tasks(id) ON DELETE CASCADE,FOREIGN KEY(module_id) REFERENCES master_modules(id) ON DELETE CASCADE)`).run();}
-function canonicalAreas():W[]{const areas:W[]=BASE.map(a=>({...a,sections:a.sections.map(s=>({...s,tasks:s.tasks.map(t=>({...t,activities:t.activities.map(x=>({...x}))}))}))}));const foundation=areas.find(a=>a.number==='20')!;foundation.sections.push({number:'20.40',name:'Vald grundlösning',tasks:EXTRA.filter(t=>['crawlspace','slab','pier','basement'].includes(t.module||''))});const frame=areas.find(a=>a.number==='30')!;frame.sections.push({number:'30.20',name:'Vald stomtyp',tasks:EXTRA.filter(t=>['log','timber_frame','prefab','masonry'].includes(t.module||''))});const roof=areas.find(a=>a.number==='40')!;roof.sections.push({number:'40.30',name:'Vald takstomme',tasks:EXTRA.filter(t=>['truss','purlin'].includes(t.module||''))});const inst=areas.find(a=>a.number==='60')!;inst.sections.push({number:'60.40',name:'Vatten och avlopp – val',tasks:EXTRA.filter(t=>['private_sewage','municipal_sewage','municipal_water','shared_water','private_well'].includes(t.module||''))});inst.sections.push({number:'60.50',name:'Ventilationsprincip – val',tasks:EXTRA.filter(t=>['natural_vent','extract_vent','ftx'].includes(t.module||''))});const inv=areas.find(a=>a.number==='70')!;inv.sections.push({number:'70.20',name:'Valbara byggdelar',tasks:EXTRA.filter(t=>['wetroom','fireplace'].includes(t.module||''))});return areas}
-export async function ensureMasterV2CanonicalStructure(db:D1Database,masterId:string){await schema(db);let createdAreas=0,createdSections=0,createdTasks=0,createdActivities=0,createdModules=0;let order=0;for(const m of MODULES){order+=10;let row=await db.prepare('SELECT id FROM master_modules WHERE master_project_id=? AND code=?').bind(masterId,m.code).first<any>();let id=row?.id?String(row.id):'';if(!id){id=crypto.randomUUID();await db.prepare('INSERT INTO master_modules(id,master_project_id,group_code,group_name,selection_mode,code,name,description,sort_order) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,masterId,m.groupCode,m.groupName,m.selectionMode,m.code,m.name,m.description,order).run();createdModules++}else await db.prepare('UPDATE master_modules SET group_code=?,group_name=?,selection_mode=?,name=?,description=?,sort_order=? WHERE id=?').bind(m.groupCode,m.groupName,m.selectionMode,m.name,m.description,order,id).run()}
- const moduleRows=await db.prepare('SELECT id,code FROM master_modules WHERE master_project_id=?').bind(masterId).all();const moduleIds=new Map((moduleRows.results as any[]).map(r=>[String(r.code),String(r.id)]));let ao=0;for(const a of canonicalAreas()){ao+=10;let ar=await db.prepare('SELECT id FROM master_work_areas WHERE master_project_id=? AND number=?').bind(masterId,a.number).first<any>();let aid=ar?.id?String(ar.id):'';if(!aid){aid=crypto.randomUUID();await db.prepare('INSERT INTO master_work_areas(id,master_project_id,number,name,sort_order) VALUES(?,?,?,?,?)').bind(aid,masterId,a.number,a.name,ao).run();createdAreas++}else await db.prepare('UPDATE master_work_areas SET name=?,sort_order=? WHERE id=?').bind(a.name,ao,aid).run();let so=0;for(const s of a.sections){so+=10;let sr=await db.prepare('SELECT id FROM master_work_sections WHERE master_work_area_id=? AND number=?').bind(aid,s.number).first<any>();let sid=sr?.id?String(sr.id):'';if(!sid){sid=crypto.randomUUID();await db.prepare('INSERT INTO master_work_sections(id,master_work_area_id,number,name,sort_order) VALUES(?,?,?,?,?)').bind(sid,aid,s.number,s.name,so).run();createdSections++}else await db.prepare('UPDATE master_work_sections SET name=?,sort_order=? WHERE id=?').bind(s.name,so,sid).run();let to=0;for(const t of s.tasks){to+=10;let tr=await db.prepare('SELECT id FROM master_tasks WHERE master_work_section_id=? AND title=?').bind(sid,t.title).first<any>();let tid=tr?.id?String(tr.id):'';if(!tid){tid=crypto.randomUUID();await db.prepare('INSERT INTO master_tasks(id,master_work_section_id,title,description,sort_order) VALUES(?,?,?,?,?)').bind(tid,sid,t.title,t.description||'',to).run();createdTasks++}else await db.prepare('UPDATE master_tasks SET description=CASE WHEN ?<>\'\' THEN ? ELSE description END,sort_order=? WHERE id=?').bind(t.description||'',t.description||'',to,tid).run();if(t.module){const mid=moduleIds.get(t.module);if(mid)await db.prepare('INSERT INTO master_task_modules(master_task_id,module_id) VALUES(?,?) ON CONFLICT(master_task_id) DO UPDATE SET module_id=excluded.module_id').bind(tid,mid).run()}else await db.prepare('DELETE FROM master_task_modules WHERE master_task_id=?').bind(tid).run();let xo=0;for(const x of t.activities){xo+=10;let xr=await db.prepare('SELECT id FROM master_activities WHERE master_task_id=? AND title=?').bind(tid,x.title).first<any>();let xid=xr?.id?String(xr.id):'';if(!xid){xid=crypto.randomUUID();await db.prepare('INSERT INTO master_activities(id,master_task_id,title,description,activity_type,required,sort_order) VALUES(?,?,?,?,?,1,?)').bind(xid,tid,x.title,x.description||'',x.type,xo).run();createdActivities++}else await db.prepare('UPDATE master_activities SET activity_type=?,description=CASE WHEN ?<>\'\' THEN ? ELSE description END,sort_order=? WHERE id=?').bind(x.type,x.description||'',x.description||'',xo,xid).run()}}}}
- return{createdAreas,createdSections,createdTasks,createdActivities,createdModules}}
+
+async function schema(db:D1Database){
+ await db.prepare(`CREATE TABLE IF NOT EXISTS master_modules(id TEXT PRIMARY KEY,master_project_id TEXT NOT NULL,group_code TEXT NOT NULL,group_name TEXT NOT NULL,selection_mode TEXT NOT NULL DEFAULT 'single',code TEXT NOT NULL,name TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',sort_order INTEGER NOT NULL DEFAULT 0,UNIQUE(master_project_id,code),FOREIGN KEY(master_project_id) REFERENCES master_projects(id) ON DELETE CASCADE)`).run();
+ await db.prepare(`CREATE TABLE IF NOT EXISTS master_task_modules(master_task_id TEXT PRIMARY KEY,module_id TEXT NOT NULL,FOREIGN KEY(master_task_id) REFERENCES master_tasks(id) ON DELETE CASCADE,FOREIGN KEY(module_id) REFERENCES master_modules(id) ON DELETE CASCADE)`).run();
+}
+
+async function ensureModuleCatalog(db:D1Database,masterId:string){
+ let createdModules=0,order=0;
+ for(const m of MODULES){
+  order+=10;
+  const row=await db.prepare('SELECT id FROM master_modules WHERE master_project_id=? AND code=?').bind(masterId,m.code).first<any>();
+  if(row?.id){await db.prepare('UPDATE master_modules SET group_code=?,group_name=?,selection_mode=?,name=?,description=?,sort_order=? WHERE id=?').bind(m.groupCode,m.groupName,m.selectionMode,m.name,m.description,order,row.id).run()}
+  else{await db.prepare('INSERT INTO master_modules(id,master_project_id,group_code,group_name,selection_mode,code,name,description,sort_order) VALUES(?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),masterId,m.groupCode,m.groupName,m.selectionMode,m.code,m.name,m.description,order).run();createdModules++}
+ }
+ return createdModules;
+}
+
+async function repairExistingModuleTemplates(db:D1Database,masterId:string){
+ const rows=await db.prepare(`SELECT t.id,mm.code FROM master_tasks t JOIN master_task_modules mtm ON mtm.master_task_id=t.id JOIN master_modules mm ON mm.id=mtm.module_id WHERE mm.master_project_id=?`).bind(masterId).all();
+ const taskByModule=new Map((rows.results as any[]).map(r=>[String(r.code),String(r.id)]));
+ let updatedTasks=0,createdActivities=0;
+ for(const spec of EXTRA){
+  if(!spec.module)continue;
+  const taskId=taskByModule.get(spec.module);if(!taskId)continue;
+  await db.prepare('UPDATE master_tasks SET title=?,description=CASE WHEN ?<>\'\' THEN ? ELSE description END WHERE id=?').bind(spec.title,spec.description||'',spec.description||'',taskId).run();updatedTasks++;
+  let sort=0;
+  for(const activity of spec.activities){
+   sort+=10;
+   const existing=await db.prepare('SELECT id FROM master_activities WHERE master_task_id=? AND lower(trim(title))=lower(trim(?)) LIMIT 1').bind(taskId,activity.title).first<any>();
+   if(existing?.id)await db.prepare('UPDATE master_activities SET description=?,activity_type=?,required=1,sort_order=? WHERE id=?').bind(activity.description||'',activity.type,sort,existing.id).run();
+   else{await db.prepare('INSERT INTO master_activities(id,master_task_id,title,description,activity_type,required,sort_order) VALUES(?,?,?,?,?,1,?)').bind(crypto.randomUUID(),taskId,activity.title,activity.description||'',activity.type,sort).run();createdActivities++}
+  }
+ }
+ return{updatedTasks,createdActivities};
+}
+
+function canonicalAreas():W[]{
+ const areas:W[]=BASE.map(a=>({...a,sections:a.sections.map(s=>({...s,tasks:s.tasks.map(t=>({...t,activities:t.activities.map(x=>({...x}))}))}))}));
+ const foundation=areas.find(a=>a.number==='20')!;foundation.sections.push({number:'20.40',name:'Vald grundlösning',tasks:EXTRA.filter(t=>['crawlspace','slab','pier','basement'].includes(t.module||''))});
+ const frame=areas.find(a=>a.number==='30')!;frame.sections.push({number:'30.20',name:'Vald stomtyp',tasks:EXTRA.filter(t=>['timber_frame','prefab','masonry'].includes(t.module||''))});
+ const roof=areas.find(a=>a.number==='40')!;roof.sections.push({number:'40.30',name:'Vald takstomme',tasks:EXTRA.filter(t=>['truss'].includes(t.module||''))});
+ const inst=areas.find(a=>a.number==='60')!;inst.sections.push({number:'60.40',name:'Vatten och avlopp – val',tasks:EXTRA.filter(t=>['private_sewage','municipal_sewage','municipal_water','shared_water','private_well'].includes(t.module||''))});
+ inst.sections.push({number:'60.50',name:'Ventilationsprincip – val',tasks:EXTRA.filter(t=>['natural_vent','extract_vent','ftx'].includes(t.module||''))});
+ const inv=areas.find(a=>a.number==='70')!;inv.sections.push({number:'70.20',name:'Valbara byggdelar',tasks:EXTRA.filter(t=>['wetroom','fireplace'].includes(t.module||''))});
+ return areas;
+}
+
+export async function ensureMasterV2CanonicalStructure(db:D1Database,masterId:string){
+ await schema(db);const createdModules=await ensureModuleCatalog(db,masterId);let createdAreas=0,createdSections=0,createdTasks=0,createdActivities=0;
+ const moduleRows=await db.prepare('SELECT id,code FROM master_modules WHERE master_project_id=?').bind(masterId).all();const moduleIds=new Map((moduleRows.results as any[]).map(r=>[String(r.code),String(r.id)]));
+ let ao=0;
+ for(const a of canonicalAreas()){
+  ao+=10;let ar=await db.prepare('SELECT id FROM master_work_areas WHERE master_project_id=? AND number=?').bind(masterId,a.number).first<any>();let aid=ar?.id?String(ar.id):'';
+  if(!aid){aid=crypto.randomUUID();await db.prepare('INSERT INTO master_work_areas(id,master_project_id,number,name,sort_order) VALUES(?,?,?,?,?)').bind(aid,masterId,a.number,a.name,ao).run();createdAreas++}else await db.prepare('UPDATE master_work_areas SET name=?,sort_order=? WHERE id=?').bind(a.name,ao,aid).run();
+  let so=0;
+  for(const s of a.sections){
+   so+=10;let sr=await db.prepare('SELECT id FROM master_work_sections WHERE master_work_area_id=? AND number=?').bind(aid,s.number).first<any>();let sid=sr?.id?String(sr.id):'';
+   if(!sid){sid=crypto.randomUUID();await db.prepare('INSERT INTO master_work_sections(id,master_work_area_id,number,name,sort_order) VALUES(?,?,?,?,?)').bind(sid,aid,s.number,s.name,so).run();createdSections++}else await db.prepare('UPDATE master_work_sections SET name=?,sort_order=? WHERE id=?').bind(s.name,so,sid).run();
+   let to=0;
+   for(const t of s.tasks){
+    to+=10;let tr=await db.prepare('SELECT id FROM master_tasks WHERE master_work_section_id=? AND title=?').bind(sid,t.title).first<any>();let tid=tr?.id?String(tr.id):'';
+    if(!tid){tid=crypto.randomUUID();await db.prepare('INSERT INTO master_tasks(id,master_work_section_id,title,description,sort_order) VALUES(?,?,?,?,?)').bind(tid,sid,t.title,t.description||'',to).run();createdTasks++}else await db.prepare('UPDATE master_tasks SET description=CASE WHEN ?<>\'\' THEN ? ELSE description END,sort_order=? WHERE id=?').bind(t.description||'',t.description||'',to,tid).run();
+    if(t.module){const mid=moduleIds.get(t.module);if(mid)await db.prepare('INSERT INTO master_task_modules(master_task_id,module_id) VALUES(?,?) ON CONFLICT(master_task_id) DO UPDATE SET module_id=excluded.module_id').bind(tid,mid).run()}else await db.prepare('DELETE FROM master_task_modules WHERE master_task_id=?').bind(tid).run();
+    let xo=0;for(const x of t.activities){xo+=10;let xr=await db.prepare('SELECT id FROM master_activities WHERE master_task_id=? AND title=?').bind(tid,x.title).first<any>();if(xr?.id)await db.prepare('UPDATE master_activities SET activity_type=?,description=?,sort_order=? WHERE id=?').bind(x.type,x.description||'',xo,xr.id).run();else{await db.prepare('INSERT INTO master_activities(id,master_task_id,title,description,activity_type,required,sort_order) VALUES(?,?,?,?,?,1,?)').bind(crypto.randomUUID(),tid,x.title,x.description||'',x.type,xo).run();createdActivities++}}
+   }
+  }
+ }
+ return{createdAreas,createdSections,createdTasks,createdActivities,createdModules};
+}
+
 export function registerMasterProjectModuleRoutes(app:RouteApp){
- app.get('/api/studio/master-projects/:id/modules',async c=>{await schema(c.env.DB);const id=c.req.param('id');const r=await c.env.DB.prepare('SELECT id,group_code,group_name,selection_mode,code,name,description,sort_order FROM master_modules WHERE master_project_id=? ORDER BY sort_order,name').bind(id).all();return c.json({ok:true,modules:r.results});});
- app.post('/api/studio/master-projects/bootstrap-fritidshus-v2',async c=>{await schema(c.env.DB);const old=await c.env.DB.prepare("SELECT id FROM master_projects WHERE code='fritidshus-v2'").first<any>();if(old){const repaired=await ensureMasterV2CanonicalStructure(c.env.DB,String(old.id));return c.json({ok:true,id:old.id,created:false,repaired})}const mid=crypto.randomUUID();await c.env.DB.prepare("INSERT INTO master_projects(id,code,name,description,version,status) VALUES(?,?,?,?,2,'active')").bind(mid,'fritidshus-v2','Masterprojekt v2 – Småhus / fritidshus','Generell småhusprocess med basaktiviteter och valbara byggmoduler. Projektspecifika myndighetskrav läggs på via styrdokument.').run();try{const repaired=await ensureMasterV2CanonicalStructure(c.env.DB,mid);return c.json({ok:true,id:mid,created:true,repaired},201)}catch(error){await c.env.DB.prepare('DELETE FROM master_projects WHERE id=?').bind(mid).run().catch(()=>undefined);throw error}});
+ app.get('/api/studio/master-projects/:id/modules',async c=>{await schema(c.env.DB);const id=c.req.param('id');const r=await c.env.DB.prepare('SELECT id,group_code,group_name,selection_mode,code,name,description,sort_order FROM master_modules WHERE master_project_id=? ORDER BY sort_order,name').bind(id).all();return c.json({ok:true,modules:r.results})});
+ app.post('/api/studio/master-projects/bootstrap-fritidshus-v2',async c=>{
+  await schema(c.env.DB);const old=await c.env.DB.prepare("SELECT id FROM master_projects WHERE code='fritidshus-v2'").first<any>();
+  if(old){const createdModules=await ensureModuleCatalog(c.env.DB,String(old.id));const repaired=await repairExistingModuleTemplates(c.env.DB,String(old.id));return c.json({ok:true,id:old.id,created:false,repaired:{createdModules,...repaired}})}
+  const mid=crypto.randomUUID();await c.env.DB.prepare("INSERT INTO master_projects(id,code,name,description,version,status) VALUES(?,?,?,?,2,'active')").bind(mid,'fritidshus-v2','Masterprojekt v2 – Småhus / fritidshus','Generell småhusprocess med basaktiviteter och valbara byggmoduler. Projektspecifika myndighetskrav läggs på via styrdokument.').run();
+  try{const repaired=await ensureMasterV2CanonicalStructure(c.env.DB,mid);return c.json({ok:true,id:mid,created:true,repaired},201)}catch(error){await c.env.DB.prepare('DELETE FROM master_projects WHERE id=?').bind(mid).run().catch(()=>undefined);throw error}
+ });
 }
