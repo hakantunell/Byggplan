@@ -49,12 +49,10 @@ const EXTRA:T[]=[
  {module:'truss',title:'Montera takstolar',activities:[{title:'Montera och förankra takstolar',type:'perform'},{title:'Kontrollera stabilisering och avväxlingar',type:'check'},{title:'Kontrollera takstolar och bärande takkonstruktion mot konstruktionshandling',type:'check'}]},
  {module:'private_sewage',title:'Utför enskilt avlopp',activities:[{title:'Kontrollera gällande avloppstillstånd och tillverkaranvisning',type:'check'},{title:'Installera avloppsanläggning enligt beslut och projektering',type:'perform'},{title:'Dokumentera ledningar och anläggningsdelar före återfyllning',type:'document'},{title:'Samla entreprenörsrapport och myndighetsdokumentation',type:'document'}]},
  {module:'municipal_sewage',title:'Anslut kommunalt avlopp',activities:[{title:'Utför spillvattenanslutning enligt VA-huvudmannens krav',type:'perform'},{title:'Kontrollera och dokumentera anslutningen före återfyllning',type:'check'}]},
- {module:'municipal_water',title:'Anslut kommunalt vatten',activities:[{title:'Utför vattenanslutning enligt VA-huvudmannens krav',type:'perform'}]},
- {module:'shared_water',title:'Anslut gemensamt vatten',activities:[{title:'Utför vattenanslutning enligt gemensamhetsanläggningens krav',type:'perform'}]},
  {module:'private_well',title:'Ordna egen vattenförsörjning',activities:[{title:'Utför eller anslut egen brunn',type:'perform'},{title:'Kontrollera vatteninstallation och erforderlig vattenkvalitet',type:'check'}]},
  {module:'natural_vent',title:'Utför självdragsventilation',activities:[{title:'Montera till- och frånluftsöppningar för självdrag',type:'perform'},{title:'Kontrollera luftvägar och funktion',type:'check'}]},
  {module:'extract_vent',title:'Utför mekanisk frånluft',activities:[{title:'Montera frånluftsfläktar, kanaler och tilluft',type:'perform'},{title:'Mät och kontrollera luftflöden',type:'measurement'}]},
- {module:'ftx',title:'Utför FTX-system',activities:[{title:'Montera aggregat, kanaler, don och kondensavlopp',type:'perform'},{title:'Injustera och dokumentera luftflöden',type:'measurement'}]},
+ {module:'ftx',title:'Utför FTX-system',activities:[{title:'Montera aggregat, kanaler,don och kondensavlopp',type:'perform'},{title:'Injustera och dokumentera luftflöden',type:'measurement'}]},
  {module:'wetroom',title:'Utför våtrum',activities:[{title:'Förbered golv, golvbrunn och fall',type:'perform'},{title:'Kontrollera fall och underlag före tätskikt',type:'measurement'},{title:'Utför tätskikt enligt valt system',type:'perform'},{title:'Dokumentera tätskikt före ytskikt',type:'document'},{title:'Samla våtrumsdokumentation/intyg',type:'document'}]},
  {module:'fireplace',title:'Installera eldstad och rökkanal',activities:[{title:'Installera eldstad och rökkanal enligt produkt- och brandskyddskrav',type:'perform'},{title:'Utför erforderlig taksäkerhet och tillträdesanordningar',type:'perform'},{title:'Beställ och genomför föreskriven sotarbesiktning',type:'approval'},{title:'Spara godkänt protokoll',type:'document'}]}
 ];
@@ -99,7 +97,7 @@ function canonicalAreas():W[]{
  const foundation=areas.find(a=>a.number==='20')!;foundation.sections.push({number:'20.40',name:'Vald grundlösning',tasks:EXTRA.filter(t=>['crawlspace','slab','pier','basement'].includes(t.module||''))});
  const frame=areas.find(a=>a.number==='30')!;frame.sections.push({number:'30.20',name:'Vald stomtyp',tasks:EXTRA.filter(t=>['timber_frame','prefab','masonry'].includes(t.module||''))});
  const roof=areas.find(a=>a.number==='40')!;roof.sections.push({number:'40.30',name:'Vald takstomme',tasks:EXTRA.filter(t=>['truss'].includes(t.module||''))});
- const inst=areas.find(a=>a.number==='60')!;inst.sections.push({number:'60.40',name:'Vatten och avlopp – val',tasks:EXTRA.filter(t=>['private_sewage','municipal_sewage','municipal_water','shared_water','private_well'].includes(t.module||''))});
+ const inst=areas.find(a=>a.number==='60')!;inst.sections.push({number:'60.40',name:'Vatten och avlopp – val',tasks:EXTRA.filter(t=>['private_sewage','municipal_sewage','private_well'].includes(t.module||''))});
  inst.sections.push({number:'60.50',name:'Ventilationsprincip – val',tasks:EXTRA.filter(t=>['natural_vent','extract_vent','ftx'].includes(t.module||''))});
  const inv=areas.find(a=>a.number==='70')!;inv.sections.push({number:'70.20',name:'Valbara byggdelar',tasks:EXTRA.filter(t=>['wetroom','fireplace'].includes(t.module||''))});
  return areas;
