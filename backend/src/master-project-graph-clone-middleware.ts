@@ -97,13 +97,16 @@ export async function cloneMasterGraphAfterProjectCreate(c:any,next:any){
   const selectedGroupTasks=new Map<string,string[]>();
   for(const[masterTaskId,projectTaskId]of taskMap){const meta=metaByMasterTask.get(masterTaskId);if(!meta)continue;const list=selectedGroupTasks.get(meta.groupCode)||[];if(!list.includes(projectTaskId))list.push(projectTaskId);selectedGroupTasks.set(meta.groupCode,list)}
   const resolveTasks=(masterId:string):string[]=>{
-   const direct=taskMap.get(masterId);if(direct)return[direct];
-   const meta=metaByMasterTask.get(masterId);if(!meta)return[];
-   if(meta.groupCode==='frame'&&canonicalFrameTask)return[canonicalFrameTask];
-   const selected=selectedGroupTasks.get(meta.groupCode)||[];
-   if(meta.selectionMode==='single')return selected.slice(0,1);
-   if(meta.selectionMode==='multi')return selected;
-   return[];
+   const meta=metaByMasterTask.get(masterId);
+   if(meta){
+    if(meta.groupCode==='frame'&&canonicalFrameTask)return[canonicalFrameTask];
+    const selected=selectedGroupTasks.get(meta.groupCode)||[];
+    if(meta.selectionMode==='multi')return selected;
+    const direct=taskMap.get(masterId);if(direct)return[direct];
+    if(meta.selectionMode==='single')return selected.slice(0,1);
+    return[];
+   }
+   const direct=taskMap.get(masterId);return direct?[direct]:[];
   };
   const mapped=remapMasterGraph(graph,resolveTasks);
   await c.env.DB.prepare(`INSERT INTO project_graph_states(project_id,dependencies_json,positions_json,routes_json,updated_at) VALUES(?,?,?,?,datetime('now')) ON CONFLICT(project_id) DO UPDATE SET dependencies_json=excluded.dependencies_json,positions_json=excluded.positions_json,routes_json=excluded.routes_json,updated_at=datetime('now')`).bind(projectId,JSON.stringify(mapped.dependencies),JSON.stringify(mapped.positions),JSON.stringify(mapped.routes)).run();
